@@ -8,6 +8,7 @@ export class MixEngine extends EventTarget {
     this.generation = 0; this.running = false; this.filling = false; this.fade = 24; this.style = 'warm';
     this.automix = true; this.repeat = true; this.normalize = true; this.trimSilence = true; this.volume = .75;
     this.beatSync = true;
+    this.excludedIds = new Set();
     this.trims = {A:1,B:1}; this.nextDeck = 'A'; this.curves = fadeCurves(); this.manual = false; this.manualPosition = .5;
   }
   notify(type, detail = {}) { this.dispatchEvent(new CustomEvent(type,{detail})); }
@@ -250,6 +251,7 @@ export class MixEngine extends EventTarget {
     this.notify('change');
   }
   reorderCollection(collection, shuffled = false, random = Math.random) {
+    collection=collection.filter(t=>!this.excludedIds.has(t.id));
     // Keep audible and immediately imminent sources intact, including a live blend.
     const kept = this.voices.filter(v => v.start <= this.now + .25).sort((a,b)=>a.start-b.start);
     const pinned = [...new Set(kept.map(v=>v.track))];
@@ -260,6 +262,7 @@ export class MixEngine extends EventTarget {
     const tail = shuffled ? shuffleOrder(remaining,random) : remaining;
     if (this.voices.length) {
       this.generation++;
+      this.fillNextIndex=null;
       for (const voice of [...this.voices]) if (!kept.includes(voice)) this.removeVoice(voice);
       for (const voice of kept) if (voice.fadeOut && voice.fadeOut.start > this.now + .25) {
         this.clearFutureFade(voice);
@@ -271,6 +274,52 @@ export class MixEngine extends EventTarget {
     this.notify('change');
     if (this.running) this.fill();
     return {pinned:pinned.length,reorderable:remaining.length};
+  }
+  queueState() {
+    if(!this.running)return this.order.map(track=>({track,locked:false}));
+    const audibleIds=new Set(this.voices.filter(v=>v.start<=this.now+.015&&v.end>this.now).map(v=>v.track.id));
+    const lockedIds=new Set(this.voices.filter(v=>v.start<=this.now+.25&&v.end>this.now).map(v=>v.track.id));
+    // The first requested track is protected while its initial decode is pending.
+    if(!this.voices.length&&this.order[this.cursor-1])audibleIds.add(this.order[this.cursor-1].id);
+    const pending=this.filling&&this.fillNextIndex!=null?[this.order[this.fillNextIndex]]:[];
+    const candidates=[...this.voices.filter(v=>v.start>this.now).map(v=>v.track),...pending,...this.order.slice(this.cursor)];
+    const seen=new Set(audibleIds);
+    return candidates.filter(track=>{if(!track||seen.has(track.id))return false;seen.add(track.id);return true;}).map(track=>({track,locked:lockedIds.has(track.id)}));
+  }
+  editQueue(action,track,beforeId=null) {
+    const state=this.queueState(),entry=state.find(e=>e.track.id===track.id);
+    if(entry?.locked)throw new Error('That transition is starting. Edit a later track.');
+    if(action!=='next'&&!entry)throw new Error('The queue changed. Choose an upcoming track again.');
+    const kept=this.voices.filter(v=>v.end>this.now&&v.start<=this.now+.25).sort((a,b)=>a.start-b.start);
+    const pinned=[...new Map(kept.map(v=>[v.track.id,v.track])).values()];
+    if(this.running&&!this.voices.length&&this.order[this.cursor-1])pinned.push(this.order[this.cursor-1]);
+    const pinnedIds=new Set(pinned.map(t=>t.id));
+    if(pinnedIds.has(track.id))throw new Error('That track is already playing or about to start.');
+    const future=state.filter(e=>!e.locked).map(e=>e.track),index=future.findIndex(t=>t.id===track.id);
+    if(action==='remove')future.splice(index,1);
+    else if(action==='next'){if(index>=0)future.splice(index,1);future.unshift(track);}
+    else if(action==='up'||action==='down'){
+      const target=index+(action==='up'?-1:1);if(target<0||target>=future.length)return false;
+      [future[index],future[target]]=[future[target],future[index]];
+    }else if(action==='move'){
+      if(beforeId===track.id)return false;
+      if(beforeId!==null&&!future.some(t=>t.id===beforeId))throw new Error('Drop beside an editable upcoming track.');
+      future.splice(index,1);future.splice(beforeId===null?future.length:future.findIndex(t=>t.id===beforeId),0,track);
+    }else throw new Error('Unknown queue action.');
+    const futureIds=new Set([...state.map(e=>e.track.id),...future.map(t=>t.id)]);
+    // Keep played tracks in the repeat rotation, without placing them ahead of the edited queue.
+    const history=this.running?this.order.filter(t=>!futureIds.has(t.id)&&!pinnedIds.has(t.id)&&t.id!==track.id):[];
+    if(action==='remove')this.excludedIds.add(track.id);else if(action==='next')this.excludedIds.delete(track.id);
+    if(this.voices.length){
+      this.generation++;
+      this.fillNextIndex=null;
+      for(const voice of [...this.voices])if(!kept.includes(voice))this.removeVoice(voice);
+      for(const voice of kept)if(voice.fadeOut?.start>this.now+.25)this.clearFutureFade(voice);
+      if(kept.length)this.nextDeck=kept.at(-1).deck==='A'?'B':'A';
+    }
+    this.order=[...history,...pinned,...future.filter(t=>!pinnedIds.has(t.id))];
+    this.cursor=history.length+pinned.length;
+    this.notify('change');if(this.running)this.fill();return true;
   }
   async loadManual(track,deck) {
     this.init(); await this.context.resume();

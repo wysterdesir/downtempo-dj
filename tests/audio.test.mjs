@@ -26,6 +26,74 @@ const track=id=>({id,title:id,name:id,source:'test',createBuffer:()=>({duration:
 function setup(){const context=new Context(),engine=new MixEngine(()=>context);engine.analyze=async()=>({...analysis});return {context,engine};}
 const settle=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
 
+test('queue edits reorder prepared audio and Play next waits for the existing track',async()=>{
+  const {engine,context}=setup(),library=['one','two','three','four'].map(track);engine.repeat=false;
+  await engine.play(library);await settle();context.currentTime=2;
+  const current=engine.voices[0],originalStart=current.start;
+  engine.editQueue('next',library[3]);await settle();
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['four','two','three']);
+  assert.deepEqual(engine.voices.map(v=>v.track.id),['one','four','two']);
+  assert.equal(engine.voices[0],current);assert.equal(current.start,originalStart);assert.equal(context.currentTime,2);
+  assert.ok(engine.voices[1].start>100);assert.equal(current.source.disconnected,undefined);
+  engine.editQueue('move',library[1],'four');await settle();
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['two','four','three']);
+  engine.editQueue('down',library[1]);await settle();
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['four','two','three']);
+});
+
+test('session removal survives repeat, shuffle, and can be explicitly restored',async()=>{
+  const {engine,context}=setup(),library=['one','two','three'].map(track);
+  await engine.play(library);await settle();context.currentTime=2;
+  engine.editQueue('remove',library[1]);await settle();
+  assert.ok(engine.voices.every(v=>v.track.id!=='two'));assert.ok(engine.order.every(t=>t.id!=='two'));
+  engine.reorderCollection(library,true,()=>.99);await settle();assert.ok(engine.order.every(t=>t.id!=='two'));
+  engine.editQueue('next',library[1]);await settle();assert.equal(engine.queueState()[0].track.id,'two');assert.equal(engine.excludedIds.has('two'),false);
+});
+
+test('queue edits retain history for repeat without replaying it ahead of upcoming tracks',async()=>{
+  const {engine,context}=setup(),library=['one','two','three','four'].map(track);engine.repeat=false;
+  await engine.play(library);await settle();context.advance(engine.voices[0].end+.1);await settle();
+  const current=engine.voices[0];assert.equal(current.track.id,'two');
+  engine.editQueue('next',library[3]);await settle();
+  assert.deepEqual(engine.order.map(t=>t.id),['one','two','four','three']);
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['four','three']);assert.equal(engine.voices[0],current);
+});
+
+test('removing the final upcoming track restores the full outgoing duration and lets playback finish',async()=>{
+  const {engine,context}=setup(),library=['one','two'].map(track);engine.repeat=false;
+  await engine.play(library);await settle();context.currentTime=2;
+  const current=engine.voices[0];engine.editQueue('remove',library[1]);await settle();
+  assert.equal(engine.voices.length,1);assert.equal(current.fadeOut,null);assert.equal(current.end,current.naturalEnd);
+  context.advance(current.end+.1);await settle();assert.equal(engine.running,false);
+});
+
+test('imminent transitions reject edits and an active blend survives later queue changes',async()=>{
+  const {engine,context}=setup(),library=['one','two','three','four'].map(track);engine.repeat=false;
+  await engine.play(library);await settle();const [a,b]=engine.voices;context.currentTime=b.start-.1;
+  assert.equal(engine.queueState()[0].locked,true);assert.throws(()=>engine.editQueue('remove',library[1]),/transition/);
+  engine.editQueue('next',library[3]);await settle();assert.equal(engine.voices[0],a);assert.equal(engine.voices[1],b);
+  context.currentTime=b.start+1;engine.editQueue('remove',library[2]);await settle();
+  assert.equal(engine.voices[0],a);assert.equal(engine.voices[1],b);assert.equal(a.source.disconnected,undefined);assert.equal(b.source.disconnected,undefined);
+});
+
+test('queue edits during a future decode invalidate the old load without losing pending tracks',async()=>{
+  const {engine,context}=setup(),library=['one','two','three','four'].map(track);engine.repeat=false;
+  const original=engine.load.bind(engine);let finish;
+  engine.load=t=>t.id==='three'?new Promise(resolve=>finish=()=>original(t).then(resolve)):original(t);
+  await engine.play(library);await settle();context.currentTime=2;
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['two','three','four']);
+  engine.editQueue('remove',library[2]);assert.deepEqual(engine.queueState().map(e=>e.track.id),['two','four']);
+  finish();await settle();await settle();assert.deepEqual(engine.voices.map(v=>v.track.id),['one','two','four']);
+});
+
+test('editing while the first decode is pending preserves the requested start track',async()=>{
+  const {engine}=setup(),library=['one','two','three'].map(track);engine.repeat=false;
+  const original=engine.load.bind(engine);let finish;engine.load=t=>t.id==='one'?new Promise(resolve=>finish=()=>original(t).then(resolve)):original(t);
+  const run=engine.play(library);await settle();engine.editQueue('next',library[2]);
+  assert.deepEqual(engine.queueState().map(e=>e.track.id),['three','two']);finish();await run;await settle();
+  assert.deepEqual(engine.voices.map(v=>v.track.id),['one','three','two']);
+});
+
 test('crossfade preserves uncorrelated signal power and has exact endpoints',()=>{
   const {incoming,outgoing}=fadeCurves();assert.equal(incoming[0],0);assert.equal(outgoing[0],1);assert.equal(incoming.at(-1),1);assert.equal(outgoing.at(-1),0);
   for(let i=0;i<incoming.length;i++){assert.ok(Math.abs(incoming[i]**2+outgoing[i]**2-1)<1e-6);if(i){assert.ok(incoming[i]>=incoming[i-1]);assert.ok(outgoing[i]<=outgoing[i-1]);}}

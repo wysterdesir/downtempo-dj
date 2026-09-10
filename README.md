@@ -13,6 +13,15 @@ A personal downtempo listening room built for **wysterdesir**. Static HTML, CSS 
 
 Your library is held in memory. Local files must be selected again after a reload; browser security prevents silently reopening them. Preferences and the non-secret Google client ID/folder URL are stored on this device. Google access tokens are only held in memory.
 
+## Edit Up next
+
+- Drag a track by its grip and drop above another track, or in the end drop zone. The **↑ / ↓** buttons offer the same ordering controls for touch and keyboard use. Search results retain their positions in the full queue when edited.
+- **Next**, in either Collection or Up next, places a song after the current mix. It does not start a fade immediately. The existing **▶** button in Collection remains **Play now**.
+- **×** removes a song from this session, including future repeats and shuffles. It remains in Collection; choose Next or Play now there to bring it back. Reconnecting the same library does not undo removals or queue edits.
+- Already audible decks and a transition beginning within a quarter-second stay untouched. Imminent tracks display a locked status. Other prepared tracks are rescheduled to match the new order, preserving beat sync and restoring any canceled outgoing fade.
+- Up next shows each other track once, in its next playback order. With Repeat on, the remaining session tracks cycle, including earlier tracks. Turn Repeat off for the session to finish after its prepared queue. Manual queue edits turn off the Shuffle indicator; choosing Shuffle again rearranges the remaining session collection.
+- Queue changes last for this browser session. Saving playlists and restoring sessions are separate future features.
+
 ## Cover art
 
 Covers appear beside track names in Collection and Up next, and on both decks. The supplied 104 artwork filenames match all 104 recordings checked on September 10, 2026.
