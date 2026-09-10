@@ -19,8 +19,10 @@ Your library is held in memory. Local files must be selected again after a reloa
 - Playback starts and 1,024-point gain curves run on the **Web Audio clock**. Animation frames only draw UI; they do not drive audio transitions.
 - Equal-power sine/cosine gains use a smoothstep phase to avoid sudden envelope slope changes. Warm mode reduces the outgoing low end while bringing in the incoming bass.
 - Conservative RMS level matching, capped gain boost and peak headroom, plus a master dynamics compressor. This is not a LUFS-certified loudness normalizer or a true-peak brickwall limiter.
-- Silence detection trims near-silent track edges. Off-main-thread analysis produces waveforms and a confidence-scored BPM estimate. High-confidence estimates can round the requested blend duration to bars.
-- Tempo and pitch stay original. There is **no beat-grid synchronization, key detection, time stretching, or vocal/stem separation**. The engine cannot guarantee the musical judgment of a human DJ. Beatmatching unlike tempos is future work, not an advertised capability.
+- Silence detection trims near-silent track edges. Off-main-thread analysis fits separate intro and outro beat grids to low-frequency transients at roughly 5 ms resolution. The fitter retains fractional BPM, measures grid coverage and timing residuals, and rejects unreliable or irregular grids.
+- **Beat sync is on by default.** For confident grids, the incoming source matches the actual outgoing tempo, including any existing rate adjustment. Every beat in the overlap shares the same audio-clock position. The overlap covers a multiple of four beats and ends on a detected outgoing beat. A short pre-roll preserves the incoming attack. Play-next quantizes to the next beat when the current region has a reliable grid.
+- Speed changes are limited to **±6%** using native AudioBuffer playback rate. This is vinyl-style matching: **pitch changes with speed**, and the matched speed stays constant for the track to prevent drift during the blend. There is no pitch lock, key detection, downbeat/phrase recognition, or stem separation. Disable Sync beats during automix in Settings for original-speed future tracks.
+- A visible BEAT MATCHED status confirms a scheduled sync. When analysis is uncertain, tempo differences exceed the limit, the steady region is too short, or loading finishes too late, the player shows the reason and uses a shorter crossfade (about eight seconds or less) to limit clashing rhythms. Automatic grids remain estimates; precise scheduling does not guarantee correct beat interpretation for every recording.
 - Failed downloads/decodes are skipped while existing audio keeps playing. A late network response shortens the fade where possible. An exhausted prepared queue, expired Drive sign-in, a sleeping device, or browser audio suspension can still interrupt playback. Keep the device awake; optional Screen Wake Lock is used where available.
 - Repeat switches affect tracks that have not yet been prepared. Already scheduled tracks finish. Fade/style changes replan unstarted tracks; a transition already in progress completes.
 
@@ -67,7 +69,7 @@ npm run check
 npm test
 ```
 
-The automated suite checks equal-power envelopes, rendered two-tone RMS continuity, short-track bounds, silence/BPM estimates, scheduled overlap, pause/resume timing, failed-file recovery, stale async cancellation, queue refill, non-repeating completion, Drive pagination, expiry and input validation. Engine scheduling tests use an injected audio-clock model; they are not a substitute for listening tests on target browsers or an end-to-end OAuth test with your Google project.
+The automated suite checks equal-power envelopes, two-tone RMS continuity, fractional BPM/phase recovery with offbeat percussion, per-beat alignment across 32-second overlaps, chained tempo adjustments, rate-aware positions, sync cancellation, fallback cases, shuffle visibility, queue safety, Drive pagination and expiry. Independently synthesized kick patterns at different tempos align within 15 ms after analysis; ideal-grid scheduling tests align within one 48 kHz sample. These are synthetic test results, not measured accuracy on the user's music library. Engine scheduling tests use an injected audio-clock model; they are not a substitute for listening tests on target browsers or an end-to-end OAuth test with your Google project.
 
 Optional WebMCP controls expose `get_listening_session` and `configure_automix` if the browser supports `document.modelContext`. They share the same app state as the controls and never initiate playback or sign-in. Their registration, valid configuration and invalid-input rejection were checked in the local preview.
 
@@ -76,5 +78,6 @@ Optional WebMCP controls expose `get_listening_session` and `configure_automix` 
 - [Google Identity Services token model](https://developers.google.com/identity/oauth2/web/guides/use-token-model)
 - [Google Drive downloads](https://developers.google.com/workspace/drive/api/guides/manage-downloads)
 - [Web Audio scheduled source starts](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/start)
+- [Native playback rate and resampling](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/playbackRate)
 
 Beatport DJ was consulted as a functional reference for two decks, transport controls, waveforms, and its library/Automix layout. No Beatport source, artwork, audio, or account credentials are bundled.

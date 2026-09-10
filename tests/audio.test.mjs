@@ -12,7 +12,7 @@ class Param {
   setValueCurveAtTime(values,time,duration){assert.ok(time>=0);assert.ok(duration>0);assert.ok([...values].every(Number.isFinite));this.events.push({kind:'curve',values,time,duration});return this;}
   cancelScheduledValues(time){this.events=this.events.filter(e=>e.time<time);}
 }
-class AudioNode {constructor(){for(const p of ['gain','frequency','threshold','knee','ratio','attack','release'])this[p]=new Param();}connect(){}disconnect(){this.disconnected=true;}}
+class AudioNode {constructor(){for(const p of ['gain','frequency','threshold','knee','ratio','attack','release','playbackRate'])this[p]=new Param();}connect(){}disconnect(){this.disconnected=true;}}
 class Source extends AudioNode {start(time,offset){this.startTime=time;this.offset=offset;}stop(time=0){this.stopTime=time;}}
 class Context {
   constructor(){this.currentTime=0;this.state='suspended';this.sampleRate=1000;this.destination=new AudioNode();this.sources=[];}
@@ -92,5 +92,40 @@ test('shuffle invalidates a pending old preload and fills from the newly visible
   engine.reorderCollection(library,true,()=>.999);
   resolveOld({buffer:{duration:120},analysis});await settle();await settle();
   assert.deepEqual(engine.voices.map(v=>v.track.id),['one','three','two']);
+});
+
+test('engine applies the matched rate and source phase through consecutive transitions',async()=>{
+  const {engine,context}=setup(),library=['one','two','three'].map(track);
+  const bpms=[104,100,106];
+  engine.analyze=async()=>{throw new Error('Fixture loads supply analyzed grids');};
+  engine.load=async t=>{
+    const bpm=bpms[library.indexOf(t)],period=60/bpm;
+    const intro={bpm,period,offset:1.2,from:1.2,to:48,confidence:.95,jitter:.001};
+    return {buffer:{duration:120},analysis:{...analysis,bpm,grids:{intro,outro:{...intro,from:72,to:118.5}}}};
+  };
+  await engine.play(library);await settle();
+  const [a,b,c]=engine.voices;
+  assert.equal(b.sync.synced,true);assert.equal(c.sync.synced,true);
+  assert.ok(Math.abs(b.source.playbackRate.value-1.04)<1e-12);
+  assert.ok(Math.abs(c.source.playbackRate.value-104/106)<1e-12);
+  for(const [left,right] of [[a,b],[b,c]]){
+    const gridA=left.analysis.grids.outro,gridB=right.analysis.grids.intro;
+    for(let n=0;n<right.sync.beats;n++){
+      const time=right.sync.beatTime+n*right.sync.period;
+      const aPos=left.offset+(time-left.start)*left.rate,bPos=right.offset+(time-right.start)*right.rate;
+      assert.ok(Math.abs((aPos-gridA.offset)/gridA.period-Math.round((aPos-gridA.offset)/gridA.period))<1e-9);
+      assert.ok(Math.abs((bPos-gridB.offset)/gridB.period-Math.round((bPos-gridB.offset)/gridB.period))<1e-9);
+    }
+  }
+  context.currentTime=b.start+2;
+  const snapshot=engine.snapshot().voices.find(v=>v.id===b.id);
+  assert.ok(Math.abs(snapshot.position-(b.offset+2*b.rate))<1e-9);
+});
+test('canceling a prepared synced transition restores the outgoing track duration',async()=>{
+  const {engine,context}=setup();const g={bpm:100,period:.6,offset:1.2,from:1.2,to:118.2,confidence:.95};
+  engine.analyze=async()=>({...analysis,grids:{intro:{...g,to:48},outro:{...g,from:72}}});
+  await engine.play([track('one'),track('two')]);await settle();context.currentTime=2;
+  const current=engine.voices[0];assert.ok(current.end<current.naturalEnd);
+  engine.setAutomix(false);assert.equal(current.end,current.naturalEnd);assert.equal(current.source.stopTime,current.naturalEnd);
 });
 

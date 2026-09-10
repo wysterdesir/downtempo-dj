@@ -2,11 +2,13 @@ import {MixEngine} from './engine.js';
 import {DriveLibrary,AUDIO_EXTENSION} from './drive.js';
 import {cleanTitle,clamp,shuffleOrder} from './analysis.js';
 import {demoTracks} from './soundcheck.js';
+import {sourcePosition} from './beat-grid.js';
 
 const $=id=>document.getElementById(id),engine=new MixEngine(),drive=new DriveLibrary();
 const tracks=[],settings=$('settings');let tab='library',shuffle=false,toastTimer,dragDepth=0,wakeLock=null,renderQueued=false;
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');};
+const tempo=value=>value?Number(value).toFixed(2):'—';
 const store=(key,value)=>{try{localStorage.setItem('lowtide:'+key,String(value));}catch{}};
 const restore=(key,fallback)=>{try{return localStorage.getItem('lowtide:'+key)??fallback;}catch{return fallback;}};
 function toast(message){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('visible'),6000);}
@@ -25,7 +27,7 @@ function renderLibrary(){
   const query=$('search').value.trim().toLowerCase(),list=(tab==='queue'?queue:visibleCollection()).filter(t=>(t.title+' '+t.name).toLowerCase().includes(query));
   const activeIds=new Set(engine.active().map(v=>v.track.id));
   let html='<div class="table-scroll"><table class="track-table"><thead><tr><th>#</th><th>TRACK / SOURCE</th><th>BPM EST.</th><th>TIME</th><th><span class="sr-only">Track actions</span></th></tr></thead><tbody>';
-  list.forEach((t,i)=>{html+='<tr class="'+(activeIds.has(t.id)?'playing':'')+'"><td>'+(activeIds.has(t.id)?'<span class="playing-marker">♫</span>':String(i+1).padStart(2,'0'))+'</td><td><span class="track-name" title="'+escape(t.name)+'">'+escape(t.title)+'</span><span class="track-source '+(t.error?'error-text':'')+'">'+escape(t.error||t.source+' · '+t.status)+'</span></td><td>'+(t.analysis?.bpm||'—')+'</td><td>'+(t.analysis?clock(t.analysis.duration):'—')+'</td><td><div class="row-actions">'+['play','A','B'].map(action=>'<button data-action="'+action+'" data-id="'+escape(t.id)+'" aria-label="'+(action==='play'?'Play next: ':'Load manual deck '+action+': ')+escape(t.title)+'">'+(action==='play'?'▶':action)+'</button>').join('')+'</div></td></tr>';});
+  list.forEach((t,i)=>{html+='<tr class="'+(activeIds.has(t.id)?'playing':'')+'"><td>'+(activeIds.has(t.id)?'<span class="playing-marker">♫</span>':String(i+1).padStart(2,'0'))+'</td><td><span class="track-name" title="'+escape(t.name)+'">'+escape(t.title)+'</span><span class="track-source '+(t.error?'error-text':'')+'">'+escape(t.error||t.source+' · '+t.status)+'</span></td><td>'+tempo(t.analysis?.bpm)+'</td><td>'+(t.analysis?clock(t.analysis.duration):'—')+'</td><td><div class="row-actions">'+['play','A','B'].map(action=>'<button data-action="'+action+'" data-id="'+escape(t.id)+'" aria-label="'+(action==='play'?'Play next: ':'Load manual deck '+action+': ')+escape(t.title)+'">'+(action==='play'?'▶':action)+'</button>').join('')+'</div></td></tr>';});
   $('library-content').innerHTML=list.length?html+'</tbody></table></div>':'<p class="no-results">'+(query?'No tracks match your search.':'The queue is clear. Choose another track from your collection.')+'</p>';
 }
 $('library-content').addEventListener('click',event=>{
@@ -57,6 +59,7 @@ $('volume').oninput=event=>{engine.setVolume(Number(event.target.value));$('volu
 $('crossfader').oninput=event=>engine.setCrossfader(Number(event.target.value));
 $('normalize').onchange=event=>{engine.normalize=event.target.checked;store('normalize',engine.normalize);toast('Level matching updated for newly loaded decks.');};
 $('trim-silence').onchange=event=>{engine.trimSilence=event.target.checked;store('trim',engine.trimSilence);replan();};
+$('beat-sync').onchange=event=>{engine.beatSync=event.target.checked;store('beatSync',engine.beatSync);replan();toast(engine.beatSync?'Beat sync enabled for reliable grids.':'Beat sync off for future transitions.');};
 $('transport').onclick=()=>safe(async()=>{await engine.toggle();await keepAwake();});
 for(const deck of ['A','B']){
   $('trim-'+deck).oninput=event=>engine.setTrim(deck,Number(event.target.value));
@@ -91,10 +94,11 @@ function deckVoice(deck){const candidates=engine.voices.filter(v=>v.deck===deck)
 function surface(canvas){const dpr=window.devicePixelRatio||1,w=Math.max(1,canvas.clientWidth),h=Math.max(1,canvas.clientHeight);if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);return {ctx,w,h};}
 function drawWave(deck,voice){
   const {ctx,w,h}=surface($('wave-'+deck));ctx.strokeStyle='#28342b';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();if(!voice)return;
-  const position=clamp(voice.offset+engine.now-voice.start,voice.offset,voice.analysis.duration),progress=position/voice.analysis.duration;
+  const position=clamp(sourcePosition(voice,engine.now),voice.offset,voice.analysis.duration),progress=position/voice.analysis.duration;
+  for(const grid of Object.values(voice.analysis.grids||{}))if(grid){ctx.fillStyle='#edf2e924';for(let beat=grid.offset;beat<=grid.to;beat+=grid.period){const x=beat/voice.analysis.duration*w;ctx.fillRect(x,0,1,h);}}
   const peaks=voice.analysis.peaks,step=Math.max(1,Math.floor(peaks.length/(w/3))),color=deck==='A'?'#bcf58b':'#8ccfdc';
   for(let i=0;i<peaks.length;i+=step){const x=i/peaks.length*w,amplitude=Math.max(1,Math.pow(peaks[i],.7)*(h*.45));ctx.fillStyle=x<=progress*w?color:(deck==='A'?'#415b3a':'#38505a');ctx.fillRect(x,h/2-amplitude,Math.max(1,w/peaks.length*step-1),amplitude*2);}
-  if(voice.fadeOut){const fadePosition=(voice.offset+voice.fadeOut.start-voice.start)/voice.analysis.duration*w;ctx.fillStyle='#bcf58b10';ctx.fillRect(fadePosition,0,w-fadePosition,h);}
+  if(voice.fadeOut){const fadePosition=sourcePosition(voice,voice.fadeOut.start)/voice.analysis.duration*w;ctx.fillStyle='#bcf58b10';ctx.fillRect(fadePosition,0,w-fadePosition,h);}
   ctx.fillStyle=color;ctx.fillRect(progress*w,0,1.5,h);
 }
 function drawMeter(){const {ctx,w,h}=surface($('meter'));let level=0;if(engine.analyser){const data=new Uint8Array(engine.analyser.fftSize);engine.analyser.getByteTimeDomainData(data);level=Math.sqrt(data.reduce((sum,x)=>sum+((x-128)/128)**2,0)/data.length);}const amount=clamp((20*Math.log10(Math.max(.00001,level))+50)/50,0,1);for(let i=0;i<14;i++){const y=h-(i+1)*h/14;ctx.fillStyle=i/14<amount?(i>11?'#e4af62':i>8?'#d2e284':'#a3dc78'):'#2b362c';ctx.fillRect(3,y,w-6,h/14-2);}}
@@ -104,10 +108,11 @@ function frame(time){
     for(const deck of ['A','B']){
       const voice=deckVoice(deck);drawWave(deck,voice);$('empty-'+deck).hidden=!!voice;
       $('play-'+deck).disabled=!voice;$('cue-'+deck).disabled=!voice;$('seek-'+deck).disabled=!voice;
-      if(voice){const on=voice.start<=now,position=clamp(voice.offset+now-voice.start,voice.offset,voice.analysis.duration);
+      if(voice){const on=voice.start<=now,position=clamp(sourcePosition(voice,now),voice.offset,voice.analysis.duration);
         $('title-'+deck).textContent=voice.track.title;$('artist-'+deck).textContent=voice.track.source;
         $('format-'+deck).textContent=voice.track.name.match(/\.([a-z0-9]+)$/i)?.[1].toUpperCase()||'AUDIO';
-        $('bpm-'+deck).textContent=voice.analysis.bpm||'—';$('time-'+deck).textContent=clock(on?position:voice.offset);
+        $('bpm-'+deck).textContent=tempo(voice.sync?.synced?voice.sync.bpm:voice.analysis.bpm*(voice.rate??1));$('time-'+deck).textContent=clock(on?position:voice.offset);
+        $('note-'+deck).textContent=Math.abs((voice.rate??1)-1)>.0001?((voice.rate-1)*100>=0?'+':'')+((voice.rate-1)*100).toFixed(2)+'% tempo':'Original tempo';
         $('remaining-'+deck).textContent=on?'−'+clock(voice.end-now)+' REMAINING':'STARTS IN '+clock(voice.start-now);
         $('state-'+deck).textContent=engine.paused?'PAUSED':on?(active.length>1?'BLENDING':'ON AIR'):'UP NEXT';
         $('play-'+deck).textContent=on&&!engine.paused?'Ⅱ':'▶';$('play-'+deck).setAttribute('aria-label',on?'Pause or resume session':'Bring next track in now');
@@ -116,11 +121,15 @@ function frame(time){
     }
     const playing=engine.running&&!engine.paused;$('transport').textContent=playing?'Ⅱ':'▶';$('transport-label').textContent=engine.paused?'RESUME SESSION':playing?'PAUSE SESSION':'START SESSION';
     const current=active.at(-1),next=engine.voices.find(v=>v.start>now);
+    const transition=active.length>1?current:next;
+    $('sync-state').textContent=transition?.sync?.synced?'BEAT MATCHED':engine.beatSync?'BEAT SYNC ON':'BEAT SYNC OFF';
+    $('sync-state').classList.toggle('matched',!!transition?.sync?.synced);
+    $('sync-detail').textContent=transition?.sync?(transition.sync.synced?'Matched at '+tempo(transition.sync.bpm)+' BPM · '+transition.sync.beats+' beats':transition.sync.reason+' · gentle crossfade'):'Matches reliable beats automatically · speed changes may shift pitch slightly';
     if(active.length>1){const incoming=active.at(-1),progress=clamp((now-incoming.start)/Math.max(.01,incoming.fadeIn),0,1);$('mix-status').textContent='Blending into '+incoming.track.title;$('transition-fill').style.width=progress*100+'%';if(engine.automix)$('crossfader').value=incoming.deck==='B'?progress:1-progress;}
     else{$('transition-fill').style.width='0%';if(engine.automix&&current)$('crossfader').value=current.deck==='A'?'0':'1';
       $('mix-status').textContent=engine.paused?'Session paused. Your mix position is held.':!engine.automix?'Manual mode. You control the blend.':next?'Next blend in '+clock(next.start-now)+' · '+next.track.title:engine.filling?'Preparing the next track…':current?'Playing the final prepared track.':tracks.length?'Your collection is ready. Press play.':'Load your music. Settle into the flow.';
     }
-    $('footer-status').textContent=playing?engine.voices.length+' decks prepared · '+(engine.manual?'Manual blend':'Original tempo')+(wakeLock?' · Screen kept awake':''):engine.paused?'Paused · press Space to resume':'Audio starts only when you press play.';
+    $('footer-status').textContent=playing?engine.voices.length+' decks prepared · '+(engine.manual?'Manual blend':engine.beatSync?'Adaptive beat sync':'Original tempo')+(wakeLock?' · Screen kept awake':''):engine.paused?'Paused · press Space to resume':'Audio starts only when you press play.';
     const ids=active.map(v=>v.id).join();if(ids!==lastTrackIds){lastTrackIds=ids;requestRender();updateMediaSession(current?.track);}
     drawMeter();
   }requestAnimationFrame(frame);
@@ -134,6 +143,7 @@ engine.fade=clamp(Number(restore('fade','24')),4,48);$('fade-length').value=engi
 engine.style=restore('style','warm')==='clean'?'clean':'warm';$('mix-style').value=engine.style;
 engine.repeat=restore('repeat','true')==='true';$('repeat').classList.toggle('selected',engine.repeat);$('repeat').setAttribute('aria-pressed',engine.repeat);
 engine.normalize=restore('normalize','true')==='true';$('normalize').checked=engine.normalize;engine.trimSilence=restore('trim','true')==='true';$('trim-silence').checked=engine.trimSilence;
+engine.beatSync=restore('beatSync','true')==='true';$('beat-sync').checked=engine.beatSync;
 $('client-id').value=restore('clientId','');$('drive-folder').value=restore('folder',$('drive-folder').value);
 syncAutoLabel();requestAnimationFrame(frame);
 

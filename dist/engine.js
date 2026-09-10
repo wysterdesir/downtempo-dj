@@ -1,4 +1,5 @@
 import {clamp,fadeCurves,transitionLength,levelGain,analyzeSamples,shuffleOrder} from './analysis.js';
+import {planBeatTransition,sourcePosition} from './beat-grid.js';
 
 export class MixEngine extends EventTarget {
   constructor(contextFactory = () => new (window.AudioContext || window.webkitAudioContext)({latencyHint:'playback'})) {
@@ -6,6 +7,7 @@ export class MixEngine extends EventTarget {
     this.order = []; this.cursor = 0; this.voices = []; this.cache = new Map(); this.pending = new Map();
     this.generation = 0; this.running = false; this.filling = false; this.fade = 24; this.style = 'warm';
     this.automix = true; this.repeat = true; this.normalize = true; this.trimSilence = true; this.volume = .75;
+    this.beatSync = true;
     this.trims = {A:1,B:1}; this.nextDeck = 'A'; this.curves = fadeCurves(); this.manual = false; this.manualPosition = .5;
   }
   notify(type, detail = {}) { this.dispatchEvent(new CustomEvent(type,{detail})); }
@@ -26,7 +28,7 @@ export class MixEngine extends EventTarget {
   current() { return this.active().at(-1) || this.voices[0] || null; }
   snapshot() {
     const now = this.now;
-    return {running:this.running,paused:this.paused,manual:this.manual,voices:this.voices.map(v=>({id:v.id,track:v.track,deck:v.deck,start:v.start,end:v.end,position:clamp(v.offset+now-v.start,v.offset,v.offset+v.end-v.start),analysis:v.analysis,active:v.start<=now && v.end>now,fadeIn:v.fadeIn,fadeOut:v.fadeOut,gain:this.voiceGain(v,now)}))};
+    return {running:this.running,paused:this.paused,manual:this.manual,voices:this.voices.map(v=>({id:v.id,track:v.track,deck:v.deck,start:v.start,end:v.end,position:clamp(sourcePosition(v,now),v.offset,sourcePosition(v,v.end)),rate:v.rate,sync:v.sync,analysis:v.analysis,active:v.start<=now && v.end>now,fadeIn:v.fadeIn,fadeOut:v.fadeOut,gain:this.voiceGain(v,now)}))};
   }
   voiceGain(v, now) {
     if (now < v.start || now >= v.end) return 0;
@@ -75,17 +77,19 @@ export class MixEngine extends EventTarget {
     for(const id of this.cache.keys()) if(!keep.has(id)) this.cache.delete(id);
   }
   bounds(data) { return this.trimSilence?{start:data.analysis.start,end:Math.min(data.buffer.duration,data.analysis.end)}:{start:0,end:data.buffer.duration}; }
-  makeVoice(track,data,start,offset,deck,fadeIn=0) {
+  makeVoice(track,data,start,offset,deck,fadeIn=0,rate=1,sync=null) {
     const context=this.context, bounds=this.bounds(data);
     offset=clamp(offset,bounds.start,Math.max(bounds.start,bounds.end-.1));
     const source=context.createBufferSource(); source.buffer=data.buffer;
+    source.playbackRate.value=rate;
     const level=context.createGain(); level.gain.value=levelGain(data.analysis,this.normalize);
     const bass=context.createBiquadFilter(); bass.type='lowshelf';bass.frequency.value=180;bass.gain.value=0;
     const trim=context.createGain();trim.gain.value=this.trims[deck];
     const gain=context.createGain();gain.gain.value=fadeIn?0:1;
     const manual=context.createGain();manual.gain.value=1;
     source.connect(level);level.connect(bass);bass.connect(trim);trim.connect(gain);gain.connect(manual);manual.connect(this.master);
-    const voice={id:crypto.randomUUID(),track,analysis:data.analysis,buffer:data.buffer,source,level,bass,trim,gain,manual,deck,start,offset,end:start+bounds.end-offset,fadeIn,fadeOut:null};
+    const naturalEnd=start+(bounds.end-offset)/rate;
+    const voice={id:crypto.randomUUID(),track,analysis:data.analysis,buffer:data.buffer,source,level,bass,trim,gain,manual,deck,start,offset,rate,sync,naturalEnd,end:naturalEnd,fadeIn,fadeOut:null};
     if(fadeIn) {
       gain.gain.setValueAtTime(0,start);gain.gain.setValueCurveAtTime(this.curves.incoming,start,fadeIn);
       if(this.style==='warm') {bass.gain.setValueAtTime(-15,start);bass.gain.setValueAtTime(-15,start+fadeIn*.3);bass.gain.linearRampToValueAtTime(0,start+fadeIn*.75);}
@@ -142,15 +146,18 @@ export class MixEngine extends EventTarget {
         if(generation!==this.generation || !this.automix || this.manual) break;
         if(!loaded) {this.notify('queueend');break;}
         const bounds=this.bounds(loaded.data);
-        const length=transitionLength(this.fade,tail.end-tail.start,bounds.end-bounds.start,tail.analysis);
+        const plan=planBeatTransition(tail,loaded.data.analysis,bounds,this.now,this.fade,{enabled:this.beatSync});
+        const fallbackFade=this.beatSync?Math.min(this.fade,8):this.fade;
+        const length=transitionLength(fallbackFade,tail.end-tail.start,bounds.end-bounds.start,tail.analysis);
         // If a slow download arrives late, shorten the blend rather than schedule in the past.
-        const start=Math.max(this.now+.04,tail.end-length);
-        const duration=Math.max(0,tail.end-start);
-        const voice=this.makeVoice(loaded.track,loaded.data,start,bounds.start,this.nextDeck,duration);
+        const start=plan.synced?plan.start:Math.max(this.now+.04,tail.end-length);
+        const duration=plan.synced?plan.duration:Math.max(0,tail.end-start);
+        if(plan.synced){tail.end=plan.stop;tail.source.stop(tail.end);}
+        const voice=this.makeVoice(loaded.track,loaded.data,start,plan.offset,this.nextDeck,duration,plan.rate,plan);
         this.nextDeck=this.nextDeck==='A'?'B':'A';
         if(duration>.02) this.fadeOut(tail,start,duration);
         else this.notify('warning',{message:'The next download was late. Playback resumes as soon as it is ready.'});
-        this.notify('scheduled',{from:tail.track,to:voice.track,duration});
+        this.notify('scheduled',{from:tail.track,to:voice.track,duration,sync:plan});
       }
     } finally {
       this.filling=false;this.fillNextIndex=null;this.trimCache();this.notify('change');
@@ -161,6 +168,12 @@ export class MixEngine extends EventTarget {
     v.fadeOut={start,duration};
     v.gain.gain.setValueAtTime(1,start);v.gain.gain.setValueCurveAtTime(this.curves.outgoing,start,duration);
     if(this.style==='warm') {v.bass.gain.setValueAtTime(0,start);v.bass.gain.linearRampToValueAtTime(-15,start+duration*.65);}
+  }
+  clearFutureFade(voice) {
+    if(!voice.fadeOut || voice.fadeOut.start<=this.now)return;
+    voice.gain.gain.cancelScheduledValues(voice.fadeOut.start);
+    voice.bass.gain.cancelScheduledValues(voice.fadeOut.start);
+    voice.fadeOut=null;voice.end=voice.naturalEnd;voice.source.stop(voice.end);
   }
   async toggle() {
     this.init();
@@ -188,18 +201,24 @@ export class MixEngine extends EventTarget {
     try{data=await this.load(target);}catch(error){throw error;}
     if(generation!==this.generation)return;
     this.generation++;
-    const active=this.active(), now=this.now+.04;
+    const active=this.active();
     for(const v of [...this.voices])if(!active.includes(v))this.removeVoice(v);
-    const bounds=this.bounds(data), length=Math.min(4,(bounds.end-bounds.start)*.35,...active.map(v=>Math.max(.05,v.end-now)));
+    const bounds=this.bounds(data);
+    const plan=active.length===1?planBeatTransition(active[0],data.analysis,bounds,this.now,4,{enabled:this.beatSync,immediate:true}):{synced:false,rate:1,offset:bounds.start,reason:'Blend already underway'};
+    const now=plan.synced?plan.start:this.now+.04;
+    const length=plan.synced?plan.duration:Math.min(4,(bounds.end-bounds.start)*.35,...active.map(v=>Math.max(.05,v.end-now)));
     for(const v of active) {
       const gain=this.voiceGain(v,this.now);
       v.gain.gain.cancelScheduledValues(0);v.gain.gain.setValueAtTime(gain,this.now);
-      v.gain.gain.linearRampToValueAtTime(0,now+length);
+      if(plan.synced){
+        const curve=Float32Array.from(this.curves.outgoing,x=>x*gain);
+        v.gain.gain.setValueCurveAtTime(curve,now,length);
+      }else v.gain.gain.linearRampToValueAtTime(0,now+length);
       v.bass.gain.cancelScheduledValues(0);v.bass.gain.setTargetAtTime(0,this.now,.05);
       v.fadeOut={start:now,duration:length};v.end=now+length;v.source.stop(v.end);
     }
     const deck=active.at(-1)?.deck==='A'?'B':'A';
-    this.makeVoice(target,data,now,bounds.start,deck,length);this.nextDeck=deck==='A'?'B':'A';
+    this.makeVoice(target,data,now,plan.offset,deck,length,plan.rate,plan);this.nextDeck=deck==='A'?'B':'A';
     this.cursor=this.order.indexOf(target)+1;this.manual=false;this.running=true;this.notify('change');this.fill();
   }
   setAutomix(enabled) {
@@ -225,8 +244,7 @@ export class MixEngine extends EventTarget {
       else if(this.filling && this.fillNextIndex!=null)this.cursor=this.fillNextIndex;
       for(const v of future)this.removeVoice(v);
       for(const v of this.voices)if(v.fadeOut?.start>this.now) {
-        v.gain.gain.cancelScheduledValues(v.fadeOut.start);
-        v.bass.gain.cancelScheduledValues(v.fadeOut.start);v.fadeOut=null;
+        this.clearFutureFade(v);
       }
     }
     this.notify('change');
@@ -244,9 +262,7 @@ export class MixEngine extends EventTarget {
       this.generation++;
       for (const voice of [...this.voices]) if (!kept.includes(voice)) this.removeVoice(voice);
       for (const voice of kept) if (voice.fadeOut && voice.fadeOut.start > this.now + .25) {
-        voice.gain.gain.cancelScheduledValues(voice.fadeOut.start);
-        voice.bass.gain.cancelScheduledValues(voice.fadeOut.start);
-        voice.fadeOut = null;
+        this.clearFutureFade(voice);
       }
       if (kept.length) this.nextDeck = kept.at(-1).deck === 'A' ? 'B' : 'A';
     }
