@@ -9,6 +9,7 @@ A personal downtempo listening room built for **wysterdesir**. Static HTML, CSS 
 3. Leave Automix on for continuous playback. Choose a **Warm blend** with a gradual bass handoff or a **Clean** equal-power fade. The length slider requests 4–48 seconds; short tracks shorten the overlap automatically.
 4. The row play button brings a track in with a short transition. A/B buttons start a manual deck and turn off automix. The master button pauses both decks; individual deck play buttons pause/resume the session or bring in a prepared track. Waveform clicks and Cue restart the selected track as the current session deck.
 5. **Try a soundcheck** plays three original synthesized 38-second clips. They are explicitly test audio, not the user's recordings. This lets you try the controls without providing files or Google credentials.
+6. **Shuffle** visibly rearranges Collection into the new play order and updates Up next, including tracks that were preloaded. The current track, a blend already playing, and a transition starting within a quarter-second stay in place. Turning Shuffle off restores the original collection order after the current mix. Each toggle rebuilds the upcoming collection, so previously played tracks can appear again.
 
 Your library is held in memory. Local files must be selected again after a reload; browser security prevents silently reopening them. Preferences and the non-secret Google client ID/folder URL are stored on this device. Google access tokens are only held in memory.
 

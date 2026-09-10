@@ -1,5 +1,16 @@
 export const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
+export function shuffleOrder(items, random = Math.random) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  // A click should visibly change any reorderable list of at least two tracks.
+  if (result.length > 1 && result.every((track, i) => track === items[i])) result.push(result.shift());
+  return result;
+}
+
 // Constant-power envelopes, with a smooth velocity at both ends.
 export function fadeCurves(points = 1024) {
   const incoming = new Float32Array(points), outgoing = new Float32Array(points);

@@ -1,4 +1,4 @@
-import {clamp,fadeCurves,transitionLength,levelGain,analyzeSamples} from './analysis.js';
+import {clamp,fadeCurves,transitionLength,levelGain,analyzeSamples,shuffleOrder} from './analysis.js';
 
 export class MixEngine extends EventTarget {
   constructor(contextFactory = () => new (window.AudioContext || window.webkitAudioContext)({latencyHint:'playback'})) {
@@ -230,6 +230,31 @@ export class MixEngine extends EventTarget {
       }
     }
     this.notify('change');
+  }
+  reorderCollection(collection, shuffled = false, random = Math.random) {
+    // Keep audible and immediately imminent sources intact, including a live blend.
+    const kept = this.voices.filter(v => v.start <= this.now + .25).sort((a,b)=>a.start-b.start);
+    const pinned = [...new Set(kept.map(v=>v.track))];
+    // While the first decode is pending, keep the track the listener pressed Play on.
+    if (this.running && !this.voices.length && this.order[this.cursor-1]) pinned.push(this.order[this.cursor-1]);
+    const pinnedIds = new Set(pinned.map(t=>t.id));
+    const remaining = collection.filter(t=>!pinnedIds.has(t.id));
+    const tail = shuffled ? shuffleOrder(remaining,random) : remaining;
+    if (this.voices.length) {
+      this.generation++;
+      for (const voice of [...this.voices]) if (!kept.includes(voice)) this.removeVoice(voice);
+      for (const voice of kept) if (voice.fadeOut && voice.fadeOut.start > this.now + .25) {
+        voice.gain.gain.cancelScheduledValues(voice.fadeOut.start);
+        voice.bass.gain.cancelScheduledValues(voice.fadeOut.start);
+        voice.fadeOut = null;
+      }
+      if (kept.length) this.nextDeck = kept.at(-1).deck === 'A' ? 'B' : 'A';
+    }
+    this.order = [...pinned,...tail];
+    this.cursor = pinned.length;
+    this.notify('change');
+    if (this.running) this.fill();
+    return {pinned:pinned.length,reorderable:remaining.length};
   }
   async loadManual(track,deck) {
     this.init(); await this.context.resume();

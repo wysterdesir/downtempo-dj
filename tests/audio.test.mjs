@@ -64,3 +64,33 @@ test('Drive listing follows pages and subfolders, escapes IDs, and downloads thr
 test('expired Drive authorization is rejected before network access',async()=>{let calls=0;const client=new DriveLibrary(async()=>calls++);await assert.rejects(()=>client.request('files'),/expired/);assert.equal(calls,0);});
 test('folder validation and track title cleanup do not accept query injection',()=>{assert.equal(folderId('https://drive.google.com/drive/u/0/folders/abcdefghijk'),'abcdefghijk');assert.throws(()=>folderId("x' or trashed=false"));assert.equal(cleanTitle('2026-09-03_Luna-de-Oaxaca.mp3'),'Luna de Oaxaca');});
 
+test('shuffle replaces preloaded upcoming tracks while leaving the current source and clock intact',async()=>{
+  const {engine,context}=setup(),library=[track('one'),track('two'),track('three')];
+  await engine.play(library);await settle();context.currentTime=2;
+  const current=engine.voices[0],oldNext=engine.voices[1];
+  engine.reorderCollection(library,true,()=>.999);await settle();
+  assert.deepEqual(engine.order.map(t=>t.id),['one','three','two']);
+  assert.equal(engine.voices[0],current);assert.equal(current.source.disconnected,undefined);
+  assert.equal(engine.voices[1].track.id,'three');assert.equal(oldNext.source.disconnected,true);
+  assert.equal(context.currentTime,2);assert.ok(engine.voices[1].start<current.end);
+  engine.reorderCollection(library,false);await settle();
+  assert.deepEqual(engine.order.map(t=>t.id),['one','two','three']);assert.equal(engine.voices[0],current);
+});
+test('shuffle during a transition preserves both audible sources',async()=>{
+  const {engine,context}=setup(),library=['one','two','three','four'].map(track);
+  await engine.play(library);await settle();context.currentTime=engine.voices[1].start+1;
+  const audible=engine.active(),fade=audible[0].fadeOut;
+  engine.reorderCollection(library,true,()=>.999);await settle();
+  assert.deepEqual(engine.voices.slice(0,2),audible);assert.equal(audible[0].fadeOut,fade);
+  assert.equal(engine.voices[2].track.id,'four');
+});
+test('shuffle invalidates a pending old preload and fills from the newly visible order',async()=>{
+  const {engine,context}=setup(),library=['one','two','three'].map(track);let resolveOld;
+  const originalLoad=engine.load.bind(engine);let delayed=true;
+  engine.load=async t=>{if(t.id==='two'&&delayed){delayed=false;return new Promise(resolve=>{resolveOld=resolve;});}return originalLoad(t);};
+  await engine.play(library);await settle();context.currentTime=2;
+  engine.reorderCollection(library,true,()=>.999);
+  resolveOld({buffer:{duration:120},analysis});await settle();await settle();
+  assert.deepEqual(engine.voices.map(v=>v.track.id),['one','three','two']);
+});
+

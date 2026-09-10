@@ -1,6 +1,6 @@
 import {MixEngine} from './engine.js';
 import {DriveLibrary,AUDIO_EXTENSION} from './drive.js';
-import {cleanTitle,clamp} from './analysis.js';
+import {cleanTitle,clamp,shuffleOrder} from './analysis.js';
 import {demoTracks} from './soundcheck.js';
 
 const $=id=>document.getElementById(id),engine=new MixEngine(),drive=new DriveLibrary();
@@ -12,8 +12,8 @@ const restore=(key,fallback)=>{try{return localStorage.getItem('lowtide:'+key)??
 function toast(message){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('visible'),6000);}
 async function safe(action){try{await action();}catch(error){toast(error.message||'Something went wrong. Try again.');}finally{requestRender();}}
 function requestRender(){if(renderQueued)return;renderQueued=true;requestAnimationFrame(()=>{renderQueued=false;renderLibrary();});}
-function reshuffle(items){const result=[...items];for(let i=result.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[result[i],result[j]]=[result[j],result[i]];}return result;}
-function currentOrder(){return shuffle?reshuffle(tracks):[...tracks];}
+function currentOrder(){return shuffle?shuffleOrder(tracks):[...tracks];}
+function visibleCollection(){const ordered=[...engine.order];const ids=new Set(ordered.map(t=>t.id));return [...ordered,...tracks.filter(t=>!ids.has(t.id))];}
 function upcoming(){return [...engine.voices.filter(v=>v.start>engine.now).map(v=>v.track),...engine.order.slice(engine.cursor)];}
 function addTracks(incoming){let added=0;for(const track of incoming)if(!tracks.some(t=>t.id===track.id)){tracks.push(track);added++;}if(!engine.running)engine.order=currentOrder();else engine.order.push(...incoming.filter(t=>!engine.order.some(old=>old.id===t.id)));renderLibrary();return added;}
 function addFiles(files){const audio=Array.from(files).filter(f=>f.type.startsWith('audio/')||AUDIO_EXTENSION.test(f.name));const mapped=audio.map(file=>({id:'file:'+file.name+':'+file.size+':'+file.lastModified,name:file.name,title:cleanTitle(file.name),source:'Local file',size:file.size,status:'Not loaded',read:()=>file.arrayBuffer()}));const count=addTracks(mapped);toast(count?count+' tracks added. Ready when you are.':'No new supported audio files were found.');}
@@ -22,7 +22,7 @@ async function openFolder(){if('showDirectoryPicker' in window){try{const handle
 function renderLibrary(){
   $('track-count').textContent=tracks.length;const queue=engine.running?upcoming():engine.order;$('queue-count').textContent=queue.length;
   if(!tracks.length)return;
-  const query=$('search').value.trim().toLowerCase(),list=(tab==='queue'?queue:tracks).filter(t=>(t.title+' '+t.name).toLowerCase().includes(query));
+  const query=$('search').value.trim().toLowerCase(),list=(tab==='queue'?queue:visibleCollection()).filter(t=>(t.title+' '+t.name).toLowerCase().includes(query));
   const activeIds=new Set(engine.active().map(v=>v.track.id));
   let html='<div class="table-scroll"><table class="track-table"><thead><tr><th>#</th><th>TRACK / SOURCE</th><th>BPM EST.</th><th>TIME</th><th><span class="sr-only">Track actions</span></th></tr></thead><tbody>';
   list.forEach((t,i)=>{html+='<tr class="'+(activeIds.has(t.id)?'playing':'')+'"><td>'+(activeIds.has(t.id)?'<span class="playing-marker">♫</span>':String(i+1).padStart(2,'0'))+'</td><td><span class="track-name" title="'+escape(t.name)+'">'+escape(t.title)+'</span><span class="track-source '+(t.error?'error-text':'')+'">'+escape(t.error||t.source+' · '+t.status)+'</span></td><td>'+(t.analysis?.bpm||'—')+'</td><td>'+(t.analysis?clock(t.analysis.duration):'—')+'</td><td><div class="row-actions">'+['play','A','B'].map(action=>'<button data-action="'+action+'" data-id="'+escape(t.id)+'" aria-label="'+(action==='play'?'Play next: ':'Load manual deck '+action+': ')+escape(t.title)+'">'+(action==='play'?'▶':action)+'</button>').join('')+'</div></td></tr>';});
@@ -39,7 +39,13 @@ $('folder-open').onclick=()=>safe(openFolder);$('files-open').onclick=()=>$('fil
 $('files').onchange=event=>{addFiles(event.target.files);event.target.value='';};$('folder').onchange=event=>{addFiles(event.target.files);event.target.value='';};
 $('search').oninput=requestRender;
 for(const name of ['library','queue'])$('tab-'+name).onclick=()=>{tab=name;$('tab-library').classList.toggle('active',name==='library');$('tab-queue').classList.toggle('active',name==='queue');renderLibrary();};
-$('shuffle').onclick=()=>{shuffle=!shuffle;$('shuffle').setAttribute('aria-pressed',shuffle);$('shuffle').classList.toggle('selected',shuffle);if(!engine.running)engine.order=currentOrder();else{const future=engine.order.slice(engine.cursor);engine.order.splice(engine.cursor,future.length,...(shuffle?reshuffle(future):tracks.filter(t=>future.includes(t))));}requestRender();toast(shuffle?'Upcoming unscheduled tracks shuffled.':'Collection order restored for unscheduled tracks.');};
+$('shuffle').onclick=()=>{
+  if(tracks.length<2){toast('Add at least two tracks to shuffle.');return;}
+  shuffle=!shuffle;$('shuffle').setAttribute('aria-pressed',shuffle);$('shuffle').classList.toggle('selected',shuffle);
+  const result=engine.reorderCollection(tracks,shuffle);
+  renderLibrary();
+  toast(shuffle?(result.reorderable<2?'Shuffle is on. Add more upcoming tracks to change their order.':result.pinned?'Upcoming tracks shuffled. The current mix stays in place.':'Collection shuffled. This is your new play order.'):'Original track order restored after the current mix.');
+};
 $('repeat').onclick=()=>{engine.repeat=!engine.repeat;store('repeat',engine.repeat);$('repeat').classList.toggle('selected',engine.repeat);$('repeat').setAttribute('aria-pressed',engine.repeat);toast(engine.repeat?'The collection will keep looping.':'Repeat is off. Already prepared tracks will finish.');};
 function syncAutoLabel(){$('automix').parentElement.lastChild.textContent=engine.automix?'ON':'OFF';$('crossfader').disabled=engine.automix;$('cross-caption').textContent=engine.automix?'Automix handles the blend':'Manual deck blend';}
 $('automix').onchange=event=>{engine.setAutomix(event.target.checked);syncAutoLabel();};
