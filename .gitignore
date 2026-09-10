@@ -1,0 +1,13 @@
+node_modules/
+.env*
+!.env.example
+work/
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+*.aac
+*.aiff
+*.zip
+.DS_Store
