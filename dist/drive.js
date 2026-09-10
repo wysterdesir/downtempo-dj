@@ -1,4 +1,5 @@
 import { cleanTitle } from './analysis.js';
+import { IMAGE_EXTENSION } from './artwork.js';
 export const AUDIO_EXTENSION = /\.(mp3|wav|flac|m4a|ogg|oga|aac|aiff|aif|opus|webm)$/i;
 export function folderId(value) {
   const trimmed=String(value).trim();
@@ -49,7 +50,9 @@ export class DriveLibrary {
     }
     return response;
   }
-  async list(folder,onProgress=()=>{}) {
+  list(folder,onProgress=()=>{}) {return this.scan(folder,onProgress,false);}
+  listArtwork(folder,onProgress=()=>{}) {return this.scan(folder,onProgress,true);}
+  async scan(folder,onProgress,images) {
     const pending=[folderId(folder)],visited=new Set(),tracks=[];
     while(pending.length) {
       const id=pending.shift();if(visited.has(id))continue;visited.add(id);
@@ -61,8 +64,8 @@ export class DriveLibrary {
         const data=await (await this.request('files?'+params)).json();
         for(const file of data.files || []) {
           if(file.mimeType==='application/vnd.google-apps.folder')pending.push(file.id);
-          else if((file.mimeType?.startsWith('audio/') || AUDIO_EXTENSION.test(file.name)) && file.capabilities?.canDownload!==false) {
-            tracks.push({id:'drive:'+file.id,driveId:file.id,name:file.name,title:cleanTitle(file.name),source:'Google Drive',size:Number(file.size)||0,status:'Not loaded',read:async()=> (await this.request('files/'+encodeURIComponent(file.id)+'?alt=media')).arrayBuffer()});
+          else if((images?IMAGE_EXTENSION.test(file.name):(file.mimeType?.startsWith('audio/') || AUDIO_EXTENSION.test(file.name))) && file.capabilities?.canDownload!==false) {
+            tracks.push({id:'drive:'+file.id,driveId:file.id,name:file.name,title:cleanTitle(file.name),source:'Google Drive',size:Number(file.size)||0,status:'Not loaded',read:async()=> {const response=await this.request('files/'+encodeURIComponent(file.id)+'?alt=media');return images?response.blob():response.arrayBuffer();}});
           }
         }
         pageToken=data.nextPageToken;onProgress(tracks.length);

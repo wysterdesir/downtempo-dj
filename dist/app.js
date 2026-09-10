@@ -3,9 +3,23 @@ import {DriveLibrary,AUDIO_EXTENSION} from './drive.js';
 import {cleanTitle,clamp,shuffleOrder} from './analysis.js';
 import {demoTracks} from './soundcheck.js';
 import {sourcePosition} from './beat-grid.js';
+import {ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork} from './artwork.js';
 
 const $=id=>document.getElementById(id),engine=new MixEngine(),drive=new DriveLibrary();
 const tracks=[],settings=$('settings');let tab='library',shuffle=false,toastTimer,dragDepth=0,wakeLock=null,renderQueued=false;
+const artwork=new ArtworkLibrary();
+const coverObserver=typeof IntersectionObserver==='undefined'?null:new IntersectionObserver(entries=>{
+  for(const item of entries)if(item.isIntersecting){coverObserver.unobserve(item.target);showArtwork(item.target,item.target._coverEntry,artwork);}
+},{rootMargin:'160px'});
+function bindCovers(){
+  coverObserver?.disconnect();
+  for(const image of $('library-content').querySelectorAll('[data-cover-track]')){
+    const entry=artwork.find(tracks.find(t=>t.id===image.dataset.coverTrack));
+    if(!entry)continue;image._coverEntry=entry;
+    if(coverObserver)coverObserver.observe(image);else showArtwork(image,entry,artwork);
+  }
+}
+function addCovers(files){artwork.add(Array.from(files).filter(f=>IMAGE_EXTENSION.test(f.name)).map(file=>({id:'local-cover:'+file.name+':'+file.lastModified,name:file.name,read:async()=>file})));}
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clock=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');};
 const tempo=value=>value?Number(value).toFixed(2):'—';
@@ -18,8 +32,8 @@ function currentOrder(){return shuffle?shuffleOrder(tracks):[...tracks];}
 function visibleCollection(){const ordered=[...engine.order];const ids=new Set(ordered.map(t=>t.id));return [...ordered,...tracks.filter(t=>!ids.has(t.id))];}
 function upcoming(){return [...engine.voices.filter(v=>v.start>engine.now).map(v=>v.track),...engine.order.slice(engine.cursor)];}
 function addTracks(incoming){let added=0;for(const track of incoming)if(!tracks.some(t=>t.id===track.id)){tracks.push(track);added++;}if(!engine.running)engine.order=currentOrder();else engine.order.push(...incoming.filter(t=>!engine.order.some(old=>old.id===t.id)));renderLibrary();return added;}
-function addFiles(files){const audio=Array.from(files).filter(f=>f.type.startsWith('audio/')||AUDIO_EXTENSION.test(f.name));const mapped=audio.map(file=>({id:'file:'+file.name+':'+file.size+':'+file.lastModified,name:file.name,title:cleanTitle(file.name),source:'Local file',size:file.size,status:'Not loaded',read:()=>file.arrayBuffer()}));const count=addTracks(mapped);toast(count?count+' tracks added. Ready when you are.':'No new supported audio files were found.');}
-async function scanDirectory(handle){const files=[];for await(const entry of handle.values()){if(entry.kind==='directory')files.push(...await scanDirectory(entry));else if(AUDIO_EXTENSION.test(entry.name))files.push(await entry.getFile());}return files;}
+function addFiles(files){addCovers(files);const audio=Array.from(files).filter(f=>f.type.startsWith('audio/')||AUDIO_EXTENSION.test(f.name));const mapped=audio.map(file=>({id:'file:'+file.name+':'+file.size+':'+file.lastModified,name:file.name,title:cleanTitle(file.name),source:'Local file',size:file.size,status:'Not loaded',read:()=>file.arrayBuffer()}));const count=addTracks(mapped);const matched=tracks.filter(t=>artwork.find(t)).length;toast(count?count+' tracks added'+(matched?' · '+matched+' with covers.':'. Ready when you are.'):Array.from(files).some(f=>IMAGE_EXTENSION.test(f.name))?matched+' tracks matched with cover art.':'No new supported audio files were found.');}
+async function scanDirectory(handle){const files=[];for await(const entry of handle.values()){if(entry.kind==='directory')files.push(...await scanDirectory(entry));else if(AUDIO_EXTENSION.test(entry.name)||IMAGE_EXTENSION.test(entry.name))files.push(await entry.getFile());}return files;}
 async function openFolder(){if('showDirectoryPicker' in window){try{const handle=await window.showDirectoryPicker({mode:'read'});$('footer-status').textContent='Reading your music folder…';addFiles(await scanDirectory(handle));return;}catch(error){if(error.name==='AbortError')return;if(error.name!=='SecurityError')throw error;}}$('folder').click();}
 function renderLibrary(){
   $('track-count').textContent=tracks.length;const queue=engine.running?upcoming():engine.order;$('queue-count').textContent=queue.length;
@@ -27,8 +41,9 @@ function renderLibrary(){
   const query=$('search').value.trim().toLowerCase(),list=(tab==='queue'?queue:visibleCollection()).filter(t=>(t.title+' '+t.name).toLowerCase().includes(query));
   const activeIds=new Set(engine.active().map(v=>v.track.id));
   let html='<div class="table-scroll"><table class="track-table"><thead><tr><th>#</th><th>TRACK / SOURCE</th><th>BPM EST.</th><th>TIME</th><th><span class="sr-only">Track actions</span></th></tr></thead><tbody>';
-  list.forEach((t,i)=>{html+='<tr class="'+(activeIds.has(t.id)?'playing':'')+'"><td>'+(activeIds.has(t.id)?'<span class="playing-marker">♫</span>':String(i+1).padStart(2,'0'))+'</td><td><span class="track-name" title="'+escape(t.name)+'">'+escape(t.title)+'</span><span class="track-source '+(t.error?'error-text':'')+'">'+escape(t.error||t.source+' · '+t.status)+'</span></td><td>'+tempo(t.analysis?.bpm)+'</td><td>'+(t.analysis?clock(t.analysis.duration):'—')+'</td><td><div class="row-actions">'+['play','A','B'].map(action=>'<button data-action="'+action+'" data-id="'+escape(t.id)+'" aria-label="'+(action==='play'?'Play next: ':'Load manual deck '+action+': ')+escape(t.title)+'">'+(action==='play'?'▶':action)+'</button>').join('')+'</div></td></tr>';});
+  list.forEach((t,i)=>{html+='<tr class="'+(activeIds.has(t.id)?'playing':'')+'"><td>'+(activeIds.has(t.id)?'<span class="playing-marker">♫</span>':String(i+1).padStart(2,'0'))+'</td><td><div class="track-identity"><img class="track-cover" data-cover-track="'+escape(t.id)+'" src="'+COVER_PLACEHOLDER+'" alt="" width="44" height="44" decoding="async"><div class="track-copy"><span class="track-name" title="'+escape(t.name)+'">'+escape(t.title)+'</span><span class="track-source '+(t.error?'error-text':'')+'">'+escape(t.error||t.source+' · '+t.status)+'</span></div></div></td><td>'+tempo(t.analysis?.bpm)+'</td><td>'+(t.analysis?clock(t.analysis.duration):'—')+'</td><td><div class="row-actions">'+['play','A','B'].map(action=>'<button data-action="'+action+'" data-id="'+escape(t.id)+'" aria-label="'+(action==='play'?'Play next: ':'Load manual deck '+action+': ')+escape(t.title)+'">'+(action==='play'?'▶':action)+'</button>').join('')+'</div></td></tr>';});
   $('library-content').innerHTML=list.length?html+'</tbody></table></div>':'<p class="no-results">'+(query?'No tracks match your search.':'The queue is clear. Choose another track from your collection.')+'</p>';
+  bindCovers();
 }
 $('library-content').addEventListener('click',event=>{
   const button=event.target.closest('[data-action]');if(!button)return;const track=tracks.find(t=>t.id===button.dataset.id);if(!track)return;
@@ -39,6 +54,8 @@ $('settings-open').onclick=()=>settings.showModal();$('drive-open').onclick=()=>
 settings.addEventListener('click',event=>{if(event.target===settings){const r=settings.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)settings.close();}});
 $('folder-open').onclick=()=>safe(openFolder);$('files-open').onclick=()=>$('files').click();$('import-top').onclick=()=>$('files').click();
 $('files').onchange=event=>{addFiles(event.target.files);event.target.value='';};$('folder').onchange=event=>{addFiles(event.target.files);event.target.value='';};
+$('covers-open').onclick=()=>$('covers').click();
+$('covers').onchange=event=>{addCovers(event.target.files);event.target.value='';renderLibrary();toast(tracks.filter(t=>artwork.find(t)).length+' tracks matched with cover art.');};
 $('search').oninput=requestRender;
 for(const name of ['library','queue'])$('tab-'+name).onclick=()=>{tab=name;$('tab-library').classList.toggle('active',name==='library');$('tab-queue').classList.toggle('active',name==='queue');renderLibrary();};
 $('shuffle').onclick=()=>{
@@ -77,7 +94,21 @@ $('connect-drive').onclick=()=>safe(async()=>{
     for(const t of found){const previous=tracks.find(p=>p.id===t.id);if(previous){previous.read=t.read;previous.error=null;previous.status=previous.analysis?'Ready':'Not loaded';}}
     const count=addTracks(found);$('connection').textContent='Google Drive connected';$('drive-status').textContent=found.length+' tracks found. '+count+' added to the collection.';
     if(found.length){settings.close();toast('Drive connected. Your music is ready to load.');engine.fill();}
+    await loadDriveCovers();
   }catch(error){$('drive-status').textContent=error.message;throw error;}finally{button.disabled=false;}
+});
+async function loadDriveCovers(){
+  const folder=$('artwork-folder').value.trim();store('artworkFolder',folder);
+  if(!folder)return;
+  $('artwork-status').textContent='Finding cover art…';
+  try{
+    artwork.add(await drive.listArtwork(folder));renderLibrary();
+    $('artwork-status').textContent=tracks.filter(t=>artwork.find(t)).length+' tracks matched with cover art.';
+  }catch(error){$('artwork-status').textContent='Covers could not load: '+error.message;toast($('artwork-status').textContent);}
+}
+$('load-drive-covers').onclick=()=>safe(async()=>{
+  const button=$('load-drive-covers');button.disabled=true;
+  try{const clientId=$('client-id').value.trim();store('clientId',clientId);if(!drive.token||Date.now()>drive.expires-15000)await drive.connect(clientId);await loadDriveCovers();}finally{button.disabled=false;}
 });
 $('disconnect-drive').onclick=()=>{drive.disconnect();$('connection').textContent='Drive disconnected';$('drive-status').textContent='Disconnected. Already decoded music can finish playing. New downloads need sign-in.';toast('Google Drive disconnected.');};
 async function keepAwake(){
@@ -107,6 +138,7 @@ function frame(time){
   if(time-lastFrame>33){lastFrame=time;const now=engine.now,active=engine.active();
     for(const deck of ['A','B']){
       const voice=deckVoice(deck);drawWave(deck,voice);$('empty-'+deck).hidden=!!voice;
+      const cover=$('cover-'+deck),entry=artwork.find(voice?.track);if(cover._artwork!==entry)showArtwork(cover,entry,artwork);
       $('play-'+deck).disabled=!voice;$('cue-'+deck).disabled=!voice;$('seek-'+deck).disabled=!voice;
       if(voice){const on=voice.start<=now,position=clamp(sourcePosition(voice,now),voice.offset,voice.analysis.duration);
         $('title-'+deck).textContent=voice.track.title;$('artist-'+deck).textContent=voice.track.source;
@@ -117,7 +149,7 @@ function frame(time){
         $('state-'+deck).textContent=engine.paused?'PAUSED':on?(active.length>1?'BLENDING':'ON AIR'):'UP NEXT';
         $('play-'+deck).textContent=on&&!engine.paused?'Ⅱ':'▶';$('play-'+deck).setAttribute('aria-label',on?'Pause or resume session':'Bring next track in now');
         if(document.activeElement!==$('seek-'+deck))$('seek-'+deck).value=String(position/voice.analysis.duration*1000);
-      }else{$('state-'+deck).textContent='STANDBY';$('play-'+deck).textContent='▶';}
+      }else{$('state-'+deck).textContent='STANDBY';$('play-'+deck).textContent='▶';$('title-'+deck).textContent=deck==='A'?'Room for something good.':'The next chapter.';$('artist-'+deck).textContent='Ready when you are';}
     }
     const playing=engine.running&&!engine.paused;$('transport').textContent=playing?'Ⅱ':'▶';$('transport-label').textContent=engine.paused?'RESUME SESSION':playing?'PAUSE SESSION':'START SESSION';
     const current=active.at(-1),next=engine.voices.find(v=>v.start>now);
@@ -145,6 +177,7 @@ engine.repeat=restore('repeat','true')==='true';$('repeat').classList.toggle('se
 engine.normalize=restore('normalize','true')==='true';$('normalize').checked=engine.normalize;engine.trimSilence=restore('trim','true')==='true';$('trim-silence').checked=engine.trimSilence;
 engine.beatSync=restore('beatSync','true')==='true';$('beat-sync').checked=engine.beatSync;
 $('client-id').value=restore('clientId','');$('drive-folder').value=restore('folder',$('drive-folder').value);
+$('artwork-folder').value=restore('artworkFolder',$('artwork-folder').value);
 syncAutoLabel();requestAnimationFrame(frame);
 
 const registry=document.modelContext;

@@ -13,6 +13,16 @@ A personal downtempo listening room built for **wysterdesir**. Static HTML, CSS 
 
 Your library is held in memory. Local files must be selected again after a reload; browser security prevents silently reopening them. Preferences and the non-secret Google client ID/folder URL are stored on this device. Google access tokens are only held in memory.
 
+## Cover art
+
+Covers appear beside track names in Collection and Up next, and on both decks. The supplied 104 artwork filenames match all 104 recordings checked on September 10, 2026.
+
+- **Local music:** Open the music folder with its artwork subfolder included, or click **Add covers** and select the images separately. Dragging images into the player works too. Covers selected before music are matched when tracks are added.
+- **Google Drive:** Connecting music also scans the artwork folder prefilled in Settings. **Settings → Cover art → Load Drive covers** loads or refreshes artwork independently, including for locally selected songs. This uses the same Google OAuth client ID and browser sign-in as music; the Codex connector cannot supply credentials to the website.
+- Matching ignores the music filename's date prefix, extension, accents, case and separators. The supplied `Nwit-Lakay-2` recording explicitly shares `nwit-lakay.jpg`. Other version/remix suffixes stay distinct to avoid incorrect matches.
+- Supported covers are JPG, PNG, WebP, AVIF and GIF. Images load on demand with at most three concurrent downloads and are reused between the playlist and decks. Missing, inaccessible or invalid images show a record placeholder without interrupting audio. Load Drive covers again to retry after reconnecting.
+- Selected images and authenticated image URLs stay in browser memory. No cover files, audio or tokens are published to GitHub. Local artwork must be selected again after reloading, or loaded through Drive again.
+
 ## Automix design
 
 - Full audio decoding before a source is scheduled. Up to three voices (current plus two ahead), bounded decoded-buffer caching, and node cleanup after completion.
