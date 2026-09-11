@@ -13,6 +13,15 @@ A personal downtempo listening room built for **wysterdesir**. Static HTML, CSS 
 
 Your library is held in memory. Local files must be selected again after a reload; browser security prevents silently reopening them. Preferences and the non-secret Google client ID/folder URL are stored on this device. Google access tokens are only held in memory.
 
+## Listening Mode
+
+Choose **Listening** in the top bar for a cover carousel inspired by an overlapping album display. The current track is prominent in the center, up to three recently played tracks sit to its left, and up to three upcoming tracks sit to its right. Covers use the same private/local artwork library as the decks.
+
+- During a crossfade, the center follows the louder deck and the same cover elements slide between positions. Manual crossfader position also influences the selected center. No audio is started, stopped or rescheduled just by switching views.
+- Click a neighboring cover, use the previous/next arrows, swipe horizontally, or focus the carousel and use the left/right keys to change tracks. Clicking the center cover or the large play button pauses/resumes the session. Going back walks through this session's recent listening history.
+- Playback position, seeking and volume share the existing engine. **Up next** reveals the editable library below the carousel; **Add music** opens the audio picker. Use **DJ decks** for the full mixing controls.
+- The last selected view is remembered on this device. The carousel honors reduced-motion preferences and handles missing covers with the existing record placeholder. History and music remain session-local; previous covers appear as tracks are played.
+
 ## Edit Up next
 
 - Drag a track by its grip and drop above another track, or in the end drop zone. The **↑ / ↓** buttons offer the same ordering controls for touch and keyboard use. Search results retain their positions in the full queue when edited.

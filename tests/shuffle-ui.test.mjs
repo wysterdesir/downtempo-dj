@@ -7,12 +7,13 @@ import {DriveLibrary,AUDIO_EXTENSION} from '../dist/drive.js';
 import {cleanTitle,clamp,shuffleOrder} from '../dist/analysis.js';
 import {demoTracks} from '../dist/soundcheck.js';
 import {ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork} from '../dist/artwork.js';
+import {ListeningMode} from '../dist/listening.js';
 
 async function createUI(){
   const elements=new Map();
-  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',checked:false,disabled:false,style:{},listeners:{},parentElement:{lastChild:{}},classList:{add(){},remove(){},toggle(){}},setAttribute(name,value){this[name]=value;},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];}});return elements.get(id);};
-  const document={getElementById:get,addEventListener(){}};
-  const context=vm.createContext({document,window:{addEventListener(){}},navigator:{},localStorage:{getItem(){return null;},setItem(){}},requestAnimationFrame(){},setTimeout(){return 0;},clearTimeout(){},MixEngine,DriveLibrary,AUDIO_EXTENSION,cleanTitle,clamp,shuffleOrder:items=>shuffleOrder(items,()=>.999),demoTracks,ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork});
+  const get=id=>{if(!elements.has(id))elements.set(id,{value:'',textContent:'',innerHTML:'',checked:false,disabled:false,style:{},listeners:{},parentElement:{lastChild:{}},classList:{add(){},remove(){},toggle(){}},setAttribute(name,value){this[name]=value;},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},querySelector(selector){return get(selector.slice(1));}});return elements.get(id);};
+  const document={getElementById:get,addEventListener(){},body:{classList:{toggle(){}}}};
+  const context=vm.createContext({document,window:{addEventListener(){}},navigator:{},localStorage:{getItem(){return null;},setItem(){}},requestAnimationFrame(){},setTimeout(){return 0;},clearTimeout(){},MixEngine,DriveLibrary,AUDIO_EXTENSION,cleanTitle,clamp,shuffleOrder:items=>shuffleOrder(items,()=>.999),demoTracks,ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork,ListeningMode});
   const source=(await readFile(new URL('../dist/app.js',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
   vm.runInContext(source,context);
   vm.runInContext("addTracks(['Alpha','Bravo','Charlie'].map(id=>({id,title:id,name:id,source:'test',status:'Ready'})));",context);

@@ -4,6 +4,7 @@ import {cleanTitle,clamp,shuffleOrder} from './analysis.js';
 import {demoTracks} from './soundcheck.js';
 import {sourcePosition} from './beat-grid.js';
 import {ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork} from './artwork.js';
+import {ListeningMode} from './listening.js?v=1.4.0';
 
 const $=id=>document.getElementById(id),engine=new MixEngine(),drive=new DriveLibrary();
 const tracks=[],settings=$('settings');let tab='library',shuffle=false,toastTimer,dragDepth=0,wakeLock=null,renderQueued=false;
@@ -201,6 +202,7 @@ function frame(time){
     $('footer-status').textContent=playing?engine.voices.length+' decks prepared · '+(engine.manual?'Manual blend':engine.beatSync?'Adaptive beat sync':'Original tempo')+(wakeLock?' · Screen kept awake':''):engine.paused?'Paused · press Space to resume':'Audio starts only when you press play.';
     const ids=active.map(v=>v.id).join();if(ids!==lastTrackIds){lastTrackIds=ids;requestRender();updateMediaSession(current?.track);}
     drawMeter();
+    listening.update();
   }requestAnimationFrame(frame);
 }
 function updateMediaSession(track){if(!('mediaSession' in navigator)||!track)return;navigator.mediaSession.metadata=new MediaMetadata({title:track.title,artist:track.source,album:'Lowtide listening room'});}
@@ -215,6 +217,18 @@ engine.normalize=restore('normalize','true')==='true';$('normalize').checked=eng
 engine.beatSync=restore('beatSync','true')==='true';$('beat-sync').checked=engine.beatSync;
 $('client-id').value=restore('clientId','');$('drive-folder').value=restore('folder',$('drive-folder').value);
 $('artwork-folder').value=restore('artworkFolder',$('artwork-folder').value);
+const listening=new ListeningMode({root:$('listening-mode'),engine,artwork,getTracks:()=>tracks,
+  onToggle:()=>$('transport').onclick(),
+  onSelect:track=>safe(async()=>{if(!engine.order.some(t=>t.id===track.id))engine.editQueue('next',track);await engine.playNext(track);await keepAwake();}),
+  onSeek:(voice,position)=>safe(()=>engine.seek(voice,position)),
+  onVolume:value=>{$('volume').value=value;$('volume').oninput({target:$('volume')});},
+});
+function setListening(enabled){document.body.classList.toggle('listening-view',enabled);$('listening-mode').hidden=!enabled;$('view-listening').setAttribute('aria-pressed',enabled);$('view-decks').setAttribute('aria-pressed',!enabled);store('view',enabled?'listening':'decks');listening.update();}
+$('view-listening').onclick=()=>setListening(true);$('view-decks').onclick=()=>{if(window.location?.hash==='#listen')window.history?.replaceState(null,'',window.location.pathname+window.location.search);setListening(false);};
+let listeningQueueOpen=false;
+$('listen-queue').onclick=()=>{listeningQueueOpen=!listeningQueueOpen;document.body.classList.toggle('listen-library-open',listeningQueueOpen);$('listen-queue').setAttribute('aria-expanded',listeningQueueOpen);if(listeningQueueOpen){$('search').value='';$('tab-queue').onclick();$('music-library').scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});}};
+$('listen-add').onclick=()=>$('files').click();
+setListening(window.location?.hash==='#listen'||restore('view','decks')==='listening');
 syncAutoLabel();requestAnimationFrame(frame);
 
 const registry=document.modelContext;
