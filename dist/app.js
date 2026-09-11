@@ -1,10 +1,11 @@
-import {MixEngine} from './engine.js?v=1.3.1';
+import {MixEngine} from './engine.js?v=1.5.0';
 import {DriveLibrary,AUDIO_EXTENSION} from './drive.js';
 import {cleanTitle,clamp,shuffleOrder} from './analysis.js';
 import {demoTracks} from './soundcheck.js';
 import {sourcePosition} from './beat-grid.js';
 import {ArtworkLibrary,IMAGE_EXTENSION,COVER_PLACEHOLDER,showArtwork} from './artwork.js';
-import {ListeningMode} from './listening.js?v=1.4.0';
+import {ListeningMode} from './listening.js?v=1.5.0';
+import {effectivePhrases} from './phrases.js?v=1.5.0';
 
 const $=id=>document.getElementById(id),engine=new MixEngine(),drive=new DriveLibrary();
 const tracks=[],settings=$('settings');let tab='library',shuffle=false,toastTimer,dragDepth=0,wakeLock=null,renderQueued=false;
@@ -33,7 +34,7 @@ function requestRender(){if(renderQueued)return;renderQueued=true;requestAnimati
 function currentOrder(){return shuffle?shuffleOrder(tracks):[...tracks];}
 function visibleCollection(){const ordered=[...engine.order];const ids=new Set(ordered.map(t=>t.id));return [...ordered,...tracks.filter(t=>!ids.has(t.id))];}
 function upcoming(){return engine.queueState().map(e=>e.track);}
-function addTracks(incoming){const added=[];for(const track of incoming)if(!tracks.some(t=>t.id===track.id)){tracks.push(track);added.push(track);}engine.order.push(...(shuffle?shuffleOrder(added):added));renderLibrary();return added.length;}
+function addTracks(incoming){const added=[];for(const track of incoming)if(!tracks.some(t=>t.id===track.id)){try{track.phraseCue=JSON.parse(restore('phraseCue:'+track.id,'null'));}catch{}tracks.push(track);added.push(track);}engine.order.push(...(shuffle?shuffleOrder(added):added));renderLibrary();return added.length;}
 function addFiles(files){addCovers(files);const audio=Array.from(files).filter(f=>f.type.startsWith('audio/')||AUDIO_EXTENSION.test(f.name));const mapped=audio.map(file=>({id:'file:'+file.name+':'+file.size+':'+file.lastModified,name:file.name,title:cleanTitle(file.name),source:'Local file',size:file.size,status:'Not loaded',read:()=>file.arrayBuffer()}));const count=addTracks(mapped);const matched=tracks.filter(t=>artwork.find(t)).length;toast(count?count+' tracks added'+(matched?' · '+matched+' with covers.':'. Ready when you are.'):Array.from(files).some(f=>IMAGE_EXTENSION.test(f.name))?matched+' tracks matched with cover art.':'No new supported audio files were found.');}
 async function scanDirectory(handle){const files=[];for await(const entry of handle.values()){if(entry.kind==='directory')files.push(...await scanDirectory(entry));else if(AUDIO_EXTENSION.test(entry.name)||IMAGE_EXTENSION.test(entry.name))files.push(await entry.getFile());}return files;}
 async function openFolder(){if('showDirectoryPicker' in window){try{const handle=await window.showDirectoryPicker({mode:'read'});$('footer-status').textContent='Reading your music folder…';addFiles(await scanDirectory(handle));return;}catch(error){if(error.name==='AbortError')return;if(error.name!=='SecurityError')throw error;}}$('folder').click();}
@@ -88,7 +89,8 @@ $('library-content').addEventListener('drop',event=>{
   if(target&&track)safe(()=>editQueue('move',track,target.dataset.queueId??null));else renderLibrary();
 });
 $('library-content').addEventListener('dragend',()=>{clearQueueDrag();renderLibrary();});
-$('settings-open').onclick=()=>settings.showModal();$('drive-open').onclick=()=>settings.showModal();
+function openSettings(){refreshPhraseCue();settings.showModal();}
+$('settings-open').onclick=openSettings;$('drive-open').onclick=openSettings;
 settings.addEventListener('click',event=>{if(event.target===settings){const r=settings.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)settings.close();}});
 $('folder-open').onclick=()=>safe(openFolder);$('files-open').onclick=()=>$('files').click();$('import-top').onclick=()=>$('files').click();
 $('files').onchange=event=>{addFiles(event.target.files);event.target.value='';};$('folder').onchange=event=>{addFiles(event.target.files);event.target.value='';};
@@ -114,7 +116,28 @@ $('volume').oninput=event=>{engine.setVolume(Number(event.target.value));$('volu
 $('crossfader').oninput=event=>engine.setCrossfader(Number(event.target.value));
 $('normalize').onchange=event=>{engine.normalize=event.target.checked;store('normalize',engine.normalize);toast('Level matching updated for newly loaded decks.');};
 $('trim-silence').onchange=event=>{engine.trimSilence=event.target.checked;store('trim',engine.trimSilence);replan();};
-$('beat-sync').onchange=event=>{engine.beatSync=event.target.checked;store('beatSync',engine.beatSync);replan();toast(engine.beatSync?'Beat sync enabled for reliable grids.':'Beat sync off for future transitions.');};
+$('beat-sync').onchange=event=>{engine.beatSync=event.target.checked;$('phrase-sync').disabled=!engine.beatSync;store('beatSync',engine.beatSync);replan();toast(engine.beatSync?'Beat sync enabled for reliable grids.':'Beat sync off for future transitions.');};
+$('phrase-sync').onchange=event=>{engine.phraseSync=event.target.checked;store('phraseSync',engine.phraseSync);replan();toast(engine.phraseSync?'Phrase matching enabled for future transitions.':'Future transitions will use beat matching.');};
+let cueVoice=null,cueTrack=null,cueAnalysis=null;
+function refreshPhraseCue(){
+  cueVoice=listening.state?.voice||engine.current();cueTrack=cueVoice?.track;cueAnalysis=cueVoice?.analysis;
+  $('phrase-cue-track').textContent=cueTrack?cueTrack.title:'Play a track to set its phrase cue.';
+  $('phrase-anchor').value=cueTrack?(cueTrack.phraseCue?.anchor??Math.max(0,sourcePosition(cueVoice,engine.now))).toFixed(3):'';
+  $('phrase-bars').value=String(cueTrack?.phraseCue?.bars||8);
+  for(const id of ['phrase-anchor','phrase-bars','phrase-now','phrase-save','phrase-reset'])$(id).disabled=!cueTrack;
+  $('phrase-cue-status').textContent=cueTrack?.phraseCue?'Using your saved phrase cue.':cueAnalysis?.phrases?'Estimated '+cueAnalysis.phrases.bars+'-bar structure.':'Automatic phrase structure is uncertain.';
+}
+$('phrase-now').onclick=()=>{if(!engine.voices.includes(cueVoice))refreshPhraseCue();if(cueVoice)$('phrase-anchor').value=Math.max(0,sourcePosition(cueVoice,engine.now)).toFixed(3);};
+$('phrase-save').onclick=()=>safe(()=>{
+  if(!cueTrack)return;const anchor=Number($('phrase-anchor').value),bars=Number($('phrase-bars').value);
+  if($('phrase-anchor').value===''||!Number.isFinite(anchor)||anchor<0||anchor>=cueAnalysis.duration||![8,16,32].includes(bars))throw new Error('Choose a phrase start within this track and an 8, 16 or 32 bar length.');
+  const grids=Object.values(cueAnalysis.grids||{}).filter(Boolean),grid=grids.find(g=>anchor>=g.from&&anchor<=g.to)||grids[0];
+  if(!grid)throw new Error('This track needs a reliable beat grid before a phrase cue can be used.');
+  const snapped=grid.offset+Math.round((anchor-grid.offset)/grid.period)*grid.period;
+  if(snapped<0||snapped>=cueAnalysis.duration)throw new Error('Choose a cue inside the audible track.');
+  cueTrack.phraseCue=cueAnalysis.phraseCue={anchor:snapped,bars};store('phraseCue:'+cueTrack.id,JSON.stringify(cueTrack.phraseCue));$('phrase-anchor').value=snapped.toFixed(3);$('phrase-cue-status').textContent='Saved · snapped to the nearest detected beat.';replan();toast('Phrase cue saved for '+cueTrack.title+'.');
+});
+$('phrase-reset').onclick=()=>{if(!cueTrack)return;cueTrack.phraseCue=cueAnalysis.phraseCue=null;store('phraseCue:'+cueTrack.id,'null');$('phrase-cue-status').textContent='Using automatic phrase analysis.';replan();};
 $('transport').onclick=()=>safe(async()=>{await engine.toggle();await keepAwake();});
 for(const deck of ['A','B']){
   $('trim-'+deck).oninput=event=>engine.setTrim(deck,Number(event.target.value));
@@ -165,6 +188,7 @@ function drawWave(deck,voice){
   const {ctx,w,h}=surface($('wave-'+deck));ctx.strokeStyle='#28342b';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();if(!voice)return;
   const position=clamp(sourcePosition(voice,engine.now),voice.offset,voice.analysis.duration),progress=position/voice.analysis.duration;
   for(const grid of Object.values(voice.analysis.grids||{}))if(grid){ctx.fillStyle='#edf2e924';for(let beat=grid.offset;beat<=grid.to;beat+=grid.period){const x=beat/voice.analysis.duration*w;ctx.fillRect(x,0,1,h);}}
+  const phrases=effectivePhrases(voice.analysis);if(phrases){ctx.fillStyle='#e4af6280';for(const boundary of phrases.boundaries){const x=boundary.time/voice.analysis.duration*w;ctx.fillRect(x,0,2,h);ctx.fillRect(x,0,6,4);}}
   const peaks=voice.analysis.peaks,step=Math.max(1,Math.floor(peaks.length/(w/3))),color=deck==='A'?'#bcf58b':'#8ccfdc';
   for(let i=0;i<peaks.length;i+=step){const x=i/peaks.length*w,amplitude=Math.max(1,Math.pow(peaks[i],.7)*(h*.45));ctx.fillStyle=x<=progress*w?color:(deck==='A'?'#415b3a':'#38505a');ctx.fillRect(x,h/2-amplitude,Math.max(1,w/peaks.length*step-1),amplitude*2);}
   if(voice.fadeOut){const fadePosition=sourcePosition(voice,voice.fadeOut.start)/voice.analysis.duration*w;ctx.fillStyle='#bcf58b10';ctx.fillRect(fadePosition,0,w-fadePosition,h);}
@@ -192,9 +216,9 @@ function frame(time){
     const playing=engine.running&&!engine.paused;$('transport').textContent=playing?'Ⅱ':'▶';$('transport-label').textContent=engine.paused?'RESUME SESSION':playing?'PAUSE SESSION':'START SESSION';
     const current=active.at(-1),next=engine.voices.find(v=>v.start>now);
     const transition=active.length>1?current:next;
-    $('sync-state').textContent=transition?.sync?.synced?'BEAT MATCHED':engine.beatSync?'BEAT SYNC ON':'BEAT SYNC OFF';
+    $('sync-state').textContent=transition?.sync?.phraseMatched?'PHRASE MATCHED':transition?.sync?.synced?'BEAT MATCHED':engine.beatSync?'BEAT SYNC ON':'BEAT SYNC OFF';
     $('sync-state').classList.toggle('matched',!!transition?.sync?.synced);
-    $('sync-detail').textContent=transition?.sync?(transition.sync.synced?'Matched at '+tempo(transition.sync.bpm)+' BPM · '+transition.sync.beats+' beats':transition.sync.reason+' · gentle crossfade'):'Matches reliable beats automatically · speed changes may shift pitch slightly';
+    $('sync-detail').textContent=transition?.sync?(transition.sync.phraseMatched?transition.sync.bars+'-bar blend · '+tempo(transition.sync.bpm)+' BPM · '+(transition.sync.phraseManual?'saved cue used':'estimated phrases'):transition.sync.synced?'Beat matched · '+(transition.sync.phraseReason||tempo(transition.sync.bpm)+' BPM'):transition.sync.reason+' · gentle crossfade'):'Matches reliable beats and musical phrases automatically';
     if(active.length>1){const incoming=active.at(-1),progress=clamp((now-incoming.start)/Math.max(.01,incoming.fadeIn),0,1);$('mix-status').textContent='Blending into '+incoming.track.title;$('transition-fill').style.width=progress*100+'%';if(engine.automix)$('crossfader').value=incoming.deck==='B'?progress:1-progress;}
     else{$('transition-fill').style.width='0%';if(engine.automix&&current)$('crossfader').value=current.deck==='A'?'0':'1';
       $('mix-status').textContent=engine.paused?'Session paused. Your mix position is held.':!engine.automix?'Manual mode. You control the blend.':next?'Next blend in '+clock(next.start-now)+' · '+next.track.title:engine.filling?'Preparing the next track…':current?'Playing the final prepared track.':tracks.length?'Your collection is ready. Press play.':'Load your music. Settle into the flow.';
@@ -210,11 +234,12 @@ if('mediaSession' in navigator){for(const [action,handler] of Object.entries({pl
 for(const event of ['change','loaded','scheduled'])engine.addEventListener(event,requestRender);
 engine.addEventListener('trackerror',event=>toast(event.detail.track.title+': '+event.detail.error));engine.addEventListener('warning',event=>toast(event.detail.message));engine.addEventListener('ended',()=>{keepAwake();toast('The session has ended.');});
 engine.volume=clamp(Number(restore('volume','.75')),0,1);$('volume').value=engine.volume;$('volume-label').textContent=Math.round(engine.volume*100)+'%';
-engine.fade=clamp(Number(restore('fade','24')),4,48);$('fade-length').value=engine.fade;$('fade-label').textContent=engine.fade+' s';
+engine.fade=clamp(Number(restore('fade','24')),4,96);$('fade-length').value=engine.fade;$('fade-label').textContent=engine.fade+' s';
 engine.style=restore('style','warm')==='clean'?'clean':'warm';$('mix-style').value=engine.style;
 engine.repeat=restore('repeat','true')==='true';$('repeat').classList.toggle('selected',engine.repeat);$('repeat').setAttribute('aria-pressed',engine.repeat);
 engine.normalize=restore('normalize','true')==='true';$('normalize').checked=engine.normalize;engine.trimSilence=restore('trim','true')==='true';$('trim-silence').checked=engine.trimSilence;
 engine.beatSync=restore('beatSync','true')==='true';$('beat-sync').checked=engine.beatSync;
+engine.phraseSync=restore('phraseSync','true')==='true';$('phrase-sync').checked=engine.phraseSync;$('phrase-sync').disabled=!engine.beatSync;
 $('client-id').value=restore('clientId','');$('drive-folder').value=restore('folder',$('drive-folder').value);
 $('artwork-folder').value=restore('artworkFolder',$('artwork-folder').value);
 const listening=new ListeningMode({root:$('listening-mode'),engine,artwork,getTracks:()=>tracks,
@@ -235,6 +260,6 @@ const registry=document.modelContext;
 if(registry?.registerTool){const lifecycle=new AbortController();window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});
   for(const tool of [
     {name:'get_listening_session',description:'Read the visible music collection, prepared queue, and playback status.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:()=>({tracks:tracks.map(t=>({id:t.id,title:t.title,status:t.status})),playing:engine.running&&!engine.paused,automix:engine.automix,queue:upcoming().map(t=>({id:t.id,title:t.title}))})},
-    {name:'configure_automix',description:'Change the same automix settings as the visible controls. Does not start audio.',inputSchema:{type:'object',properties:{enabled:{type:'boolean'},seconds:{type:'number',minimum:4,maximum:48},style:{type:'string',enum:['warm','clean']}},required:['enabled','seconds','style'],additionalProperties:false},annotations:{readOnlyHint:false},execute:input=>{if(typeof input.enabled!=='boolean'||!Number.isFinite(input.seconds)||input.seconds<4||input.seconds>48||!['warm','clean'].includes(input.style))throw new Error('Invalid automix settings.');engine.fade=input.seconds;engine.style=input.style;engine.setAutomix(input.enabled);$('automix').checked=input.enabled;$('fade-length').value=input.seconds;$('fade-label').textContent=input.seconds+' s';$('mix-style').value=input.style;replan();syncAutoLabel();return {enabled:engine.automix,seconds:engine.fade,style:engine.style};}},
+    {name:'configure_automix',description:'Change the same automix settings as the visible controls. Does not start audio.',inputSchema:{type:'object',properties:{enabled:{type:'boolean'},seconds:{type:'number',minimum:4,maximum:96},style:{type:'string',enum:['warm','clean']}},required:['enabled','seconds','style'],additionalProperties:false},annotations:{readOnlyHint:false},execute:input=>{if(typeof input.enabled!=='boolean'||!Number.isFinite(input.seconds)||input.seconds<4||input.seconds>96||!['warm','clean'].includes(input.style))throw new Error('Invalid automix settings.');engine.fade=input.seconds;engine.style=input.style;engine.setAutomix(input.enabled);$('automix').checked=input.enabled;$('fade-length').value=input.seconds;$('fade-label').textContent=input.seconds+' s';$('mix-style').value=input.style;replan();syncAutoLabel();return {enabled:engine.automix,seconds:engine.fade,style:engine.style};}},
   ]){try{Promise.resolve(registry.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}
 }

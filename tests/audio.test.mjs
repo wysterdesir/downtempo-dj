@@ -197,3 +197,16 @@ test('canceling a prepared synced transition restores the outgoing track duratio
   engine.setAutomix(false);assert.equal(current.end,current.naturalEnd);assert.equal(current.source.stopTime,current.naturalEnd);
 });
 
+test('engine schedules phrase envelopes on the audio clock and queue removal restores the cut outro',async()=>{
+  const {engine,context}=setup(),library=['one','two'].map(track);engine.repeat=false;
+  const grid={bpm:100,period:.6,offset:1.2,from:1.2,to:118.2,confidence:.95};
+  library[0].phraseCue=library[1].phraseCue={anchor:1.2,bars:8};
+  engine.analyze=async()=>({...analysis,grids:{intro:{...grid,to:96},outro:{...grid,from:24}}});
+  await engine.play(library);await settle();context.currentTime=2;
+  const [a,b]=engine.voices;assert.equal(b.sync.phraseMatched,true);assert.equal(b.sync.phraseManual,true);
+  assert.equal(b.source.startTime,b.sync.start);assert.equal(a.source.stopTime,b.sync.stop);
+  const incoming=b.gain.gain.events.find(e=>e.kind==='curve'),outgoing=a.gain.gain.events.find(e=>e.kind==='curve');
+  assert.equal(incoming.time,outgoing.time);assert.equal(incoming.duration,outgoing.duration);assert.ok(a.end<a.naturalEnd);
+  engine.editQueue('remove',library[1]);await settle();assert.equal(a.end,a.naturalEnd);assert.equal(a.source.stopTime,a.naturalEnd);assert.equal(a.fadeOut,null);
+});
+

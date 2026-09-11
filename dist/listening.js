@@ -85,8 +85,9 @@ export class ListeningMode {
     if(document.activeElement!==seek)seek.value=voice?position/voice.analysis.duration*1000:0;
     this.text('listen-time',clock(position));this.text('listen-remaining',voice?'−'+clock(Math.max(0,voice.end-this.engine.now)):'0:00');
     if(document.activeElement!==this.get('listen-volume'))this.get('listen-volume').value=this.engine.volume;
-    const prepared=this.engine.voices.find(v=>v.start>this.engine.now),incoming=this.engine.active().at(-1);
-    this.text('listen-transition',blending?'Blending into '+incoming.track.title:this.engine.paused?'Your place in the music is held.':!this.engine.automix?'Manual mix · switch to DJ decks for mixing controls.':prepared?'Next in '+clock(prepared.start-this.engine.now)+' · '+prepared.track.title:voice?'Let the music unfold.':center?'Press play. Settle into the flow.':'Add your music to start the flow.');
+    const prepared=this.engine.voices.find(v=>v.start>this.engine.now),incoming=this.engine.active().at(-1),sync=(blending?incoming:prepared)?.sync;
+    const phrase=sync?.phraseMatched?' · '+sync.bars+'-bar phrase blend':'';
+    this.text('listen-transition',blending?'Blending into '+incoming.track.title+phrase:this.engine.paused?'Your place in the music is held.':!this.engine.automix?'Manual mix · switch to DJ decks for mixing controls.':prepared?'Next in '+clock(prepared.start-this.engine.now)+' · '+prepared.track.title+phrase:voice?'Let the music unfold.':center?'Press play. Settle into the flow.':'Add your music to start the flow.');
   }
   text(id,value){const element=this.get(id);if(element.textContent!==value)element.textContent=value;}
 }

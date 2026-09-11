@@ -1,5 +1,6 @@
-import {clamp,fadeCurves,transitionLength,levelGain,analyzeSamples,shuffleOrder} from './analysis.js';
+import {clamp,fadeCurves,transitionLength,levelGain,analyzeSamples,shuffleOrder} from './analysis.js?v=1.5.0';
 import {planBeatTransition,sourcePosition} from './beat-grid.js';
+import {planMusicalTransition} from './phrases.js?v=1.5.0';
 
 export class MixEngine extends EventTarget {
   constructor(contextFactory = () => new (window.AudioContext || window.webkitAudioContext)({latencyHint:'playback'})) {
@@ -8,6 +9,7 @@ export class MixEngine extends EventTarget {
     this.generation = 0; this.running = false; this.filling = false; this.fade = 24; this.style = 'warm';
     this.automix = true; this.repeat = true; this.normalize = true; this.trimSilence = true; this.volume = .75;
     this.beatSync = true;
+    this.phraseSync = true;
     this.excludedIds = new Set();
     this.trims = {A:1,B:1}; this.nextDeck = 'A'; this.curves = fadeCurves(); this.manual = false; this.manualPosition = .5;
   }
@@ -49,7 +51,7 @@ export class MixEngine extends EventTarget {
       samples[i]=value;
     }
     if (typeof Worker === 'undefined') return analyzeSamples(samples,buffer.sampleRate/stride,buffer.duration);
-    const worker = new Worker(new URL('./analysis-worker.js',import.meta.url),{type:'module'});
+    const worker = new Worker(new URL('./analysis-worker.js?v=1.5.0',import.meta.url),{type:'module'});
     return new Promise((resolve,reject)=>{
       const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Audio analysis timed out.'));},60000);
       worker.onmessage=({data})=>{clearTimeout(timeout);worker.terminate();data.error?reject(new Error(data.error)):resolve(data.analysis);};
@@ -66,6 +68,7 @@ export class MixEngine extends EventTarget {
         const buffer = track.createBuffer ? track.createBuffer(this.context) : await this.context.decodeAudioData(await track.read());
         if(buffer.duration < .25) throw new Error('The audio is too short to play.');
         const analysis = await this.analyze(buffer);
+        analysis.phraseCue=track.phraseCue||null;
         track.analysis=analysis; track.status='Ready'; track.error=null;
         const result={buffer,analysis}; this.cache.set(track.id,result); this.notify('loaded',{track}); return result;
       } catch(error) {track.status='Unavailable';track.error=error.message;this.notify('trackerror',{track,error:error.message});throw error;}
@@ -147,7 +150,7 @@ export class MixEngine extends EventTarget {
         if(generation!==this.generation || !this.automix || this.manual) break;
         if(!loaded) {this.notify('queueend');break;}
         const bounds=this.bounds(loaded.data);
-        const plan=planBeatTransition(tail,loaded.data.analysis,bounds,this.now,this.fade,{enabled:this.beatSync});
+        const plan=planMusicalTransition(tail,loaded.data.analysis,bounds,this.now,this.fade,{enabled:this.beatSync,phraseSync:this.phraseSync});
         const fallbackFade=this.beatSync?Math.min(this.fade,8):this.fade;
         const length=transitionLength(fallbackFade,tail.end-tail.start,bounds.end-bounds.start,tail.analysis);
         // If a slow download arrives late, shorten the blend rather than schedule in the past.

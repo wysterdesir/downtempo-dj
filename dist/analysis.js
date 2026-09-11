@@ -1,4 +1,5 @@
 import {analyzeBeatRegion} from './beat-grid.js';
+import {analyzePhrases} from './phrases.js?v=1.5.0';
 export const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
 export function shuffleOrder(items, random = Math.random) {
@@ -59,10 +60,11 @@ export function analyzeSamples(samples, sampleRate, duration, bins = 720) {
   const best = scores[0] ?? {bpm:0,score:0};
   const mean = scores.reduce((a,b)=>a+b.score,0)/Math.max(1,scores.length);
   const confidence = clamp((best.score-mean)*2,0,1);
-  const intro=analyzeBeatRegion(samples,sampleRate,start,Math.min(end,start+48));
-  const outro=analyzeBeatRegion(samples,sampleRate,Math.max(start,end-48),end);
+  const intro=analyzeBeatRegion(samples,sampleRate,start,Math.min(end,start+96));
+  const outro=analyzeBeatRegion(samples,sampleRate,Math.max(start,end-96),end);
   const grid=intro||outro;
-  return { peaks, peak, rms:Math.sqrt(sum/Math.max(1,samples.length)),start,end:Math.max(start+.1,end),duration,bpm:grid?grid.bpm:confidence>.08 ? best.bpm : null,confidence:grid?.confidence??confidence,grids:{intro,outro} };
+  const phrases=analyzePhrases(samples,sampleRate,{intro,outro},start,end);
+  return { peaks, peak, rms:Math.sqrt(sum/Math.max(1,samples.length)),start,end:Math.max(start+.1,end),duration,bpm:grid?grid.bpm:confidence>.08 ? best.bpm : null,confidence:grid?.confidence??confidence,grids:{intro,outro},phrases };
 }
 
 export function transitionLength(requested, outgoingSeconds, incomingSeconds, analysis) {
