@@ -95,7 +95,6 @@ $('covers-open').onclick=()=>$('covers').click();
 $('covers').onchange=event=>{addCovers(event.target.files);event.target.value='';renderLibrary();toast(tracks.filter(t=>artwork.find(t)).length+' tracks matched with cover art.');};
 $('search').oninput=requestRender;
 for(const name of ['library','queue'])$('tab-'+name).onclick=()=>{tab=name;$('tab-library').classList.toggle('active',name==='library');$('tab-queue').classList.toggle('active',name==='queue');renderLibrary();};
-$('edit-queue').onclick=()=>{$('search').value='';$('tab-queue').onclick();$('tab-queue').focus?.();};
 $('shuffle').onclick=()=>{
   if(tracks.length<2){toast('Add at least two tracks to shuffle.');return;}
   shuffle=!shuffle;$('shuffle').setAttribute('aria-pressed',shuffle);$('shuffle').classList.toggle('selected',shuffle);
